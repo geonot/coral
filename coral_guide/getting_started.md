@@ -1,24 +1,24 @@
 # Getting Started with Coral
 
-This guide will walk you through installing Coral and writing your very first Coral program.
+This guide will walk you through installing Coral and writing your very first Coral program. Coral is designed to be easy to learn, allowing you to become productive quickly.
 
 ## Installation
 
-There are several ways to get Coral installed on your system. Below are a few common methods.
+Getting Coral set up on your system is straightforward. Below are a few common methods.
 
 ### Binary Release
 
 For most users, the quickest way to get started is by downloading a pre-compiled binary for your operating system from our official downloads page:
 
-*   **Official Downloads:** [https://coral-lang.org/downloads](https://coral-lang.org/downloads)
+*   **Official Downloads:** [https://coral-lang.org/downloads](https://coral-lang.org/downloads) (Hypothetical URL)
 
 Download the appropriate package for your system (e.g., Windows, macOS, Linux), extract it, and add the Coral executable to your system's PATH.
 
 ### Package Manager (corpkg)
 
-If you prefer using a package manager, Coral has its own (fictional) package manager called `corpkg`.
+If you prefer using a package manager, Coral has its own (fictional) package manager called `corpkg`. This tool simplifies the installation and management of Coral versions and related tools.
 
-1.  **Install `corpkg`:** Follow the instructions on the Coral website to install `corpkg`.
+1.  **Install `corpkg`:** Follow the instructions on the Coral website ([https://coral-lang.org](https://coral-lang.org)) to install `corpkg`.
 2.  **Install Coral:** Once `corpkg` is set up, you can install Coral by running:
     ```bash
     corpkg install coral
@@ -32,7 +32,7 @@ For advanced users or those who want the latest cutting-edge version, you can al
 
 ## Your First Coral Program: Hello, Coral!
 
-Let's dive in and write a simple "Hello, Coral!" program. Coral aims for a syntax that is intuitive and easy to read, drawing inspiration from the clarity of Python.
+Let's dive in and write a simple "Hello, Coral!" program. Coral's syntax is designed to be intuitive, readable, and expressive, drawing inspiration from Python's clarity while incorporating its own unique features for efficiency and robustness. You'll find that even complex operations can often be expressed cleanly, as the Coral compiler handles much of the underlying work.
 
 1.  **Create a file:**
     Open your favorite text editor and create a new file. Save it as `main.cr`. The `.cr` extension is conventionally used for Coral source files.
@@ -42,13 +42,18 @@ Let's dive in and write a simple "Hello, Coral!" program. Coral aims for a synta
 
     ```coral
     // main.cr - Your first Coral program
-    // This line prints a greeting to the console.
-    print("Hello, Coral!");
+    // Coral uses colons and indentation to define code structure,
+    // though this isn't visible in such a short script.
+    // Semicolons are not used to terminate statements.
+
+    print("Hello, Coral!") // This line prints a greeting to the console.
     ```
 
     In this simple program:
-    *   `//` denotes a single-line comment.
-    *   `print()` is a built-in function that outputs text to your console.
+    *   `//` denotes a single-line comment. Coral also supports multi-line comments with `/* ... */`.
+    *   `print()` is a built-in function that outputs text to your console. Its usage is straightforward, and it implicitly handles the standard `(result, error)` tuple for simple cases.
+    *   `"Hello, Coral!"` is a **string literal**. In Coral, string literals (which don't embed variable values) are enclosed in double quotes.
+    *   Coral does not use semicolons to end lines; the end of the line signifies the end of the statement.
 
 3.  **Run the program:**
     Open your terminal or command prompt, navigate to the directory where you saved `main.cr`, and run it using the Coral interpreter:
@@ -69,4 +74,35 @@ Let's dive in and write a simple "Hello, Coral!" program. Coral aims for a synta
     Hello, Coral!
     ```
 
-Congratulations! You've successfully written and executed your first Coral program. In the next chapters, we'll explore the features and syntax of Coral in more detail.
+Congratulations! You've successfully written and executed your first Coral program.
+
+**Exploring a bit more (Conceptual):**
+
+As you move forward, you'll discover more of Coral's clean and expressive syntax:
+
+*   **Variables and Constants:** You'll use the `is` keyword for assignment. Constant names are typically in `ALL_CAPS`, signaling their immutable intent.
+    ```coral
+    // Conceptual example:
+    // MY_GREETING is "Hello" // A constant
+    // target_name is 'World'   // A variable, assigned using 'is'
+    // print('{MY_GREETING}, {target_name}!') // Note: interpolated string uses single quotes
+    ```
+*   **String Interpolation:** Strings that need to embed variable values use single quotes (`'`) and curly braces `{}`.
+    ```coral
+    // Conceptual example:
+    // PLANET is 'Mars'
+    // print('Greetings from {PLANET}!') // Output: Greetings from Mars!
+    ```
+*   **Code Blocks:** For functions, conditional statements (`if`), and loops (`iter`), Coral uses a colon (`:`) followed by an indented block of code. This structure enhances readability.
+
+    ```coral
+    // Conceptual example of a function definition:
+    // def greet_planet(planet_name): // No type annotations needed; types are inferred
+    //     MESSAGE is 'Hello, {planet_name}!' // Assignment with 'is'
+    //     print(MESSAGE)
+    //     // Functions implicitly return (true, (0, "")) on success if no explicit return
+    //
+    // (call_result, call_error) is greet_planet('Venus') // All function calls return a tuple
+    ```
+
+These concepts will be covered in detail in the "Language Basics" chapter. For now, you've taken the first essential step into the world of Coral! In the next chapters, we'll explore the features and syntax that make Coral a productive and enjoyable language to use.

@@ -1,206 +1,174 @@
-# Language Basics - Part 1
+# Language Basics
 
-This section delves into the fundamental building blocks of the Coral language, including its syntax, how to use comments, declare variables and constants, and the basic data types you'll be working with.
+This chapter delves into the fundamental building blocks of the Coral language. Coral's syntax is designed for clarity and developer productivity, drawing inspiration from Python's readability while incorporating unique features for robustness and expressiveness. The Coral compiler handles significant underlying complexity, allowing for clean and concise code.
 
-## General Syntax
+## 1. General Syntax
 
-Coral's syntax is meticulously designed to be both readable and easy to write, drawing significant inspiration from Python's clarity.
+Coral's structure is defined by **colons (`:`) and indentation**. Code blocks, such as those in control flow statements (if, loops) and definitions (functions, classes), are initiated by a colon and then indented.
 
-*   **Readability:** Like Python, Coral can use indentation to define code blocks (e.g., in control structures, function definitions). This promotes clean and visually organized code. However, for single statements or simple blocks, explicit markers like curly braces `{}` might also be supported for flexibility, similar to languages like C# or Swift.
-*   **Case Sensitivity:** Coral is a case-sensitive language. This means `myVariable` and `myvariable` would be treated as two distinct variables.
-*   **Semicolons:** Semicolons (`;`) at the end of statements are generally optional in Coral, much like in Python. The interpreter can infer statement endings based on newlines. However, they can be used to separate multiple statements on a single line if desired.
+*   **Statement Termination:** Statements are typically one per line. Semicolons (`;`) are **not** used to terminate statements.
+*   **No Curly Braces:** Curly braces (`{}`) are **not** used to delimit blocks; indentation serves this purpose.
+*   **Case Sensitivity:** Coral is case-sensitive. `my_variable` and `MY_VARIABLE` are distinct.
 
-    ```coral
-    let message = "Hello" // Semicolon is optional
-    print(message); // Semicolon can be used
-    ```
+```coral
+// Example of a simple structure
+PI is 3.14159         // A constant assignment
+message is "Hello, Coral" // A variable assignment
 
-## Comments
+if PI gt 3:             // A conditional block starts with a colon
+    print(message)      // Indentation defines this block
+    print('PI is greater than 3') // Further statements in the block
+```
 
-Comments are crucial for explaining code. Coral supports both single-line and multi-line comments.
+## 2. Comments
 
-*   **Single-line comments:** Start with `//`. Anything from `//` to the end of the line is ignored by the interpreter.
+Comments are essential for explaining code and are ignored by the Coral interpreter.
+
+*   **Single-line comments:** Start with `//`. Everything from `//` to the end of the line is a comment.
 
     ```coral
     // This is a single-line comment.
-    let x = 10; // This comment explains the variable assignment.
+    x is 10 // This comment explains the variable assignment.
     ```
 
-*   **Multi-line comments:** Enclosed between `/*` and `*/`. This allows for comments that span multiple lines.
+*   **Multi-line comments:** Enclosed between `/*` and `*/`.
 
     ```coral
     /*
       This is a multi-line comment.
       It can span across several lines and is useful
-      for more detailed explanations or temporarily disabling
-      blocks of code.
+      for more detailed explanations or for temporarily
+      disabling blocks of code.
     */
-    let y = 20;
+    y is 20
     ```
 
-## Variables and Constants
+## 3. Variables and Constants
 
-Variables are used to store data that can change, while constants store data that, once set, cannot be altered.
+Variables store data that can change, while constants store data that, once set, should not be altered. The distinction is conventional for constants (`ALL_CAPS`) to guide developers.
 
-### Declaration
+### Declaration and Assignment
 
-*   **Variables:** Declared using the `let` keyword.
+Coral uses the `is` keyword for all assignments.
+
+*   **Variables:** Declared and assigned using `is`. Variable names are conventionally written in `snake_case`.
 
     ```coral
-    let name = "Coral";
-    let age = 1;
+    user_name is "CoralUser"
+    age is 1
+    current_score is 0.0
     ```
 
-*   **Constants:** Declared using the `const` keyword. Constants must be initialized at the time of declaration.
+*   **Constants:** Declared and assigned using `is`, with the name conventionally in `ALL_UPPERCASE` to signal intent.
 
     ```coral
-    const PI = 3.14159;
-    const SITE_NAME = "Coral Lang";
+    PI is 3.14159
+    SITE_NAME is "Coral Lang Official"
+    DEFAULT_TIMEOUT is 5000
     ```
-
-### Mutability
-
-*   `let`: Bindings introduced by `let` are re-assignable by default, offering flexibility similar to Python variables.
-
+    Reassigning a variable is straightforward:
     ```coral
-    let count = 5;
-    print(count); // Output: 5
-    count = 10;   // 'count' can be reassigned
-    print(count); // Output: 10
-    ```
-    (Note: While `let` allows reassignment, for true Rust-like mutable *data*, Coral might introduce a separate keyword like `mut` or specific mutable types if we want to go deeper into that paradigm, but for now, `let` allows rebinding).
-
-*   `const`: Bindings introduced by `const` are immutable. Once a value is assigned to a constant, it cannot be changed. This helps ensure that certain values remain fixed throughout your program, contributing to predictability and safety.
-
-    ```coral
-    const GREETING = "Hello";
-    // GREETING = "Hi"; // This would cause an error
+    count is 5
+    print(count) // The 'print' function is a built-in for easy output.
+    count is 10
+    print(count)
     ```
 
 ### Type System
 
-Coral is a **strongly typed** language, meaning that every variable and constant has a specific type, and operations between incompatible types are disallowed, catching many potential errors at compile-time or before runtime.
+Coral is a **strongly typed** language, ensuring type safety. However, it features **complete type inference**. This means you do **not** explicitly declare data types for variables, constants, or function parameters. The Coral compiler intelligently deduces the type from the value assigned or used. This reduces boilerplate and enhances readability, letting the compiler manage type details.
 
-*   **Type Inference:** Coral features powerful type inference. In many cases, you don't need to explicitly state the type of a variable; the compiler can deduce it from the initial value.
-
-    ```coral
-    let answer = 42;        // 'answer' is inferred as Integer
-    let message = "Welcome";  // 'message' is inferred as String
-    let is_ready = true;    // 'is_ready' is inferred as Boolean
-    ```
-
-*   **Optional Type Annotations:** For clarity, or when the type cannot be easily inferred (e.g., function parameters, uninitialized variables that will be assigned later), you can provide explicit type annotations using a colon (`:`). This is a feature that brings in Rust-like safety and explicitness where desired.
-
-    ```coral
-    let version: String = "1.0";
-    let user_id: Integer;
-    // user_id = "some_id"; // This would cause a type error
-    user_id = 12345;      // Correct
-    ```
+```coral
+answer is 42        // 'answer' is inferred as Integer by the compiler.
+message is "Welcome"  // 'message' is inferred as a literal String.
+is_ready is true    // 'is_ready' is inferred as Boolean.
+```
+Operations between incompatible types will result in errors, caught by the compiler.
 
 ### Naming Conventions
 
-To maintain consistency and readability, Coral suggests the following naming conventions:
+*   **Variables:** `snake_case` (e.g., `current_user`, `items_in_cart`).
+*   **Constants:** `ALL_UPPERCASE` (e.g., `MAX_USERS`, `API_KEY`).
 
-*   **Variables:** Use `snake_case` (all lowercase, with words separated by underscores).
-    ```coral
-    let current_user = "admin";
-    let items_in_cart = 5;
-    ```
-*   **Constants:** Use `UPPER_CASE` (all uppercase, with words separated by underscores).
-    ```coral
-    const MAX_USERS = 100;
-    const DEFAULT_TIMEOUT = 5000;
-    ```
+## 4. Basic Data Types
 
-## Basic Data Types
-
-Coral provides a set of fundamental data types to work with various kinds of information.
+Coral provides fundamental data types for various kinds of information.
 
 ### Integers
 
 Integers represent whole numbers.
 
 ```coral
-let count = 10;
-let negative_value = -5;
-let items_on_page = 25;
-
-// For readability with large numbers, you can use underscores as digit separators.
-let large_number = 1_000_000;
-let another_large_one = 1_234_567_890;
+count is 10
+negative_value is -5
+// Underscores can be used as digit separators for readability in long numbers.
+large_number is 1_000_000
 ```
 
 ### Floating-Point Numbers
 
-Floating-point numbers represent numbers with a decimal point, or numbers expressed in scientific notation.
+Floating-point numbers represent numbers with a decimal point or in scientific notation.
 
 ```coral
-let price = 29.99;
-let temperature = -5.5;
-let pi_approx = 3.1415926535;
-let planck_constant = 6.626e-34; // Scientific notation
+price is 29.99
+temperature is -5.5
+PLANCK_CONSTANT is 6.626e-34
 ```
 
 ### Booleans
 
-Booleans represent truth values: `true` or `false`. They are fundamental for conditional logic and comparisons.
+Booleans represent truth values: `true` or `false`.
 
 ```coral
-let is_active = true;
-let has_permission = false;
-let is_greater = 10 > 5; // Evaluates to true
+is_active is true
+has_permission is false
+is_greater is 10 gt 5 // Evaluates to true
 ```
 
 ### Strings
 
-Strings represent sequences of characters, used for text.
+Strings represent sequences of characters. Coral distinguishes between literal strings and strings that support interpolation for embedding values.
 
-*   **Declaration:** Strings can be created using double quotes (`"`).
-
-    ```coral
-    let greeting = "Hello, Coral!";
-    let empty_string = "";
-    let user_name = "Alice";
-    ```
-
-*   **Concatenation:** Strings can be joined together (concatenated) using the `+` operator.
+*   **Literal Strings (Double Quotes):** Enclosed in double quotes (`"`). These are literal: any characters within them, including curly braces, are treated as part of the string itself. Use these when you don't need to embed variable values.
 
     ```coral
-    let first_name = "Coral";
-    let last_name = "Lang";
-    let full_name = first_name + " " + last_name; // "Coral Lang"
-    print(full_name);
+    greeting_literal is "Hello, Coral!"
+    path_example is "C:/Users/Default/My Documents/{project_folder}/" // Here, {project_folder} is literal.
+    empty_string is ""
     ```
 
-*   **Length:** You can often get the length of a string using a property or method (syntax might vary, common examples include `.length` or `len()`). Let's assume a `.length` property for now.
+*   **Interpolated Strings (Single Quotes):** Enclosed in single quotes (`'`). These strings allow embedding expressions (variables, constants, or other calculations) directly within them using curly braces `{}`.
 
     ```coral
-    let message = "Hello";
-    print(message.length); // Output: 5
+    user_name is "Alice"
+    score is 100
+    welcome_message is 'Welcome, {user_name}! Your score is {score}.'
+    print(welcome_message) // Output: Welcome, Alice! Your score is 100.
+
+    ITEM_COUNT is 3
+    TOTAL_COST is 99.50
+    summary is 'You have {ITEM_COUNT} items. Total: ${TOTAL_COST}' // The $ is literal here.
+    print(summary) // Output: You have 3 items. Total: $99.50
     ```
 
-*   **String Interpolation:** Coral supports string interpolation for easily embedding expressions within string literals, typically using an `f` prefix before the string (inspired by Python f-strings) or a `${}` syntax (inspired by JavaScript/Kotlin). Let's use `f""` and `{}`.
+*   **Concatenation:** Literal strings can be concatenated using the `+` operator. For combining with interpolated values or for more complex constructions, using a single interpolated string is often cleaner.
 
     ```coral
-    let name = "User";
-    let score = 100;
-    let welcome_message = f"Hello, {name}! Your score is {score}.";
-    print(welcome_message); // Output: Hello, User! Your score is 100.
+    first_part is "Coral"
+    second_part is " Lang"
+    combined_literal is first_part + second_part // Results in "Coral Lang"
 
-    let item_count = 3;
-    let total_cost = 99.50;
-    let summary = f"You have {item_count} items. Total: ${total_cost}"; // Note: $ for currency, {} for interpolation
-    print(summary); // Output: You have 3 items. Total: $99.5
+    version_number is "1.0"
+    full_title is 'Coral Language v{version_number}' // Preferred for mixing variables
     ```
 
-This covers the first part of Coral's language basics. In the next part, we'll explore control flow, functions, and more complex data structures.
+*   **Length:** String length can typically be accessed using a `.length` property (this is a common convention; the exact mechanism is part of the String type's definition in the standard library).
 
----
-
-# Language Basics - Part 2
-
-This part continues our exploration of Coral's fundamental features, focusing on operators, control flow mechanisms, and functions.
+    ```coral
+    message is "Hello"
+    message_length is message.length // message_length would be 5
+    print('The message "{message}" has {message_length} characters.')
+    ```
 
 ## 5. Operators
 
@@ -208,254 +176,239 @@ Operators are special symbols or keywords that perform operations on values (ope
 
 ### Arithmetic Operators
 
-These are used for performing mathematical calculations.
+Standard arithmetic operations:
 
 *   `+` (Addition)
 *   `-` (Subtraction)
 *   `*` (Multiplication)
-*   `/` (Division)
-    *   Coral aims for predictable division. If both operands are integers, it might perform integer division (truncating the result). If one or both are floating-point numbers, it performs floating-point division. This behavior should be clearly defined in the language specification. For now, let's assume standard behavior: `5 / 2` is `2.5`.
+*   `/` (Division - typically results in a float if either operand is float, or if the division is not exact)
 *   `%` (Modulo/Remainder)
 
 ```coral
-let a = 10;
-let b = 3;
-let c = 2.5;
-
-print(f"a + b = {a + b}");     // Output: a + b = 13
-print(f"a - b = {a - b}");     // Output: a - b = 7
-print(f"a * b = {a * b}");     // Output: a * b = 30
-print(f"a / b = {a / b}");     // Output: a / b = 3 (Assuming integer division for now for simplicity, or 3.333... if float)
-print(f"10 / 4 = {10 / 4}");   // Output: 2.5 (If one is float or default is float division)
-print(f"a % b = {a % b}");     // Output: a % b = 1
-print(f"c * 2 = {c * 2}");     // Output: c * 2 = 5.0
+a is 10
+b is 3
+print('a + b = {a + b}')     // Output: a + b = 13
+print('10 / 4 = {10 / 4}')   // Output: 10 / 4 = 2.5
+print('a % b = {a % b}')     // Output: a % b = 1
 ```
 
 ### Comparison Operators
 
-Used to compare two values. They return a Boolean (`true` or `false`).
+Used to compare two values, returning a Boolean (`true` or `false`).
 
-*   `==` (Equal to)
-*   `!=` (Not equal to)
-*   `<` (Less than)
-*   `>` (Greater than)
-*   `<=` (Less than or equal to)
-*   `>=` (Greater than or equal to)
+*   `eq` (Equal to)
+*   `neq` (Not equal to)
+*   `lt` (Less than)
+*   `gt` (Greater than)
+*   `lte` (Less than or equal to)
+*   `gte` (Greater than or equal to)
 
 ```coral
-let x = 5;
-let y = 10;
-
-print(f"x == y: {x == y}");   // Output: x == y: false
-print(f"x != y: {x != y}");   // Output: x != y: true
-print(f"x < y: {x < y}");    // Output: x < y: true
-print(f"x >= 5: {x >= 5}");  // Output: x >= 5: true
+x is 5
+y is 10
+print('x eq y: {x eq y}')    // Output: x eq y: false
+print('x neq y: {x neq y}')  // Output: x neq y: true
+print('x lt y: {x lt y}')    // Output: x lt y: true
 ```
 
 ### Logical Operators
 
 Used to combine or invert Boolean expressions.
 
-*   `&&` (Logical AND): Returns `true` if both operands are `true`.
-*   `||` (Logical OR): Returns `true` if at least one operand is `true`.
-*   `!` (Logical NOT): Inverts the Boolean value of its operand.
+*   `and` (Logical AND: `true` if both operands are `true`)
+*   `or` (Logical OR: `true` if at least one operand is `true`)
+*   `not` (Logical NOT: inverts the Boolean value)
+*   `xor` (Logical XOR: `true` if operands are different)
 
 ```coral
-let is_logged_in = true;
-let has_admin_rights = false;
-
-print(f"Logged in AND Admin: {is_logged_in && has_admin_rights}"); // Output: false
-print(f"Logged in OR Admin: {is_logged_in || has_admin_rights}");  // Output: true
-print(f"NOT Admin: {!has_admin_rights}");                        // Output: true
+is_logged_in is true
+has_admin_rights is false
+print('Logged in AND Admin: {is_logged_in and has_admin_rights}') // Output: false
+print('NOT Admin: {not has_admin_rights}')                        // Output: true
 ```
 
-### Assignment Operators
+### Bitwise Operators
 
-Used to assign values to variables.
+For low-level manipulation of bits in integers.
 
-*   `=` (Simple assignment)
-*   `+=` (Add and assign)
-*   `-=` (Subtract and assign)
-*   `*=` (Multiply and assign)
-*   `/=` (Divide and assign)
+*   `lsh` (Left Shift: `x lsh y` shifts bits of `x` left by `y` positions)
+*   `rsh` (Right Shift: `x rsh y` shifts bits of `x` right by `y` positions)
+    *(Note: Other bitwise operators like bitwise AND, OR, XOR would typically exist, e.g., `band`, `bor`, `bxor`, `bnot`.)*
 
 ```coral
-let num = 10;
-num += 5; // num is now 15 (equivalent to num = num + 5)
-print(num);
+value is 4          // Binary 0100
+left_shifted is value lsh 1 // Binary 1000 (Decimal 8)
+print('4 lsh 1 is {left_shifted}')
+```
 
-let text = "Hello";
-text += ", Coral!"; // text is now "Hello, Coral!"
-print(text);
+### Assignment Operator
 
-num *= 2; // num is now 30
-print(num);
+The primary assignment operator is `is`. There are **no** compound assignment operators (like `+=`, `-=`). Updates are done by re-assigning, which maintains clarity.
+
+```coral
+num is 10
+num is num + 5 // num is now 15
+print(num)
+
+text is "Hello"
+text is text + ", Coral!" // text is now "Hello, Coral!"
+print(text)
 ```
 
 ## 6. Control Flow
 
-Control flow statements allow you to dictate the order in which statements are executed.
+Control flow statements dictate the order of execution. Coral uses colons and indentation.
 
 ### If/Else Statements
 
-Used to execute different blocks of code based on conditions. Coral follows a Python-like indentation for blocks.
+Execute code blocks based on conditions.
 
 ```coral
-let temperature = 25;
-
-if temperature > 30:
-    print("It's very hot!");
-elif temperature > 20:  // 'elif' for 'else if'
-    print("It's warm.");
+temperature is 25
+if temperature gt 30:
+    print('It is very hot!')
+elif temperature gt 20:  // 'elif' for 'else if'
+    print('It is warm.')
 else:
-    print("It's cool.");
-
-// Example with a single line
-if temperature == 25: print("Exactly 25 degrees!");
+    print('It is cool.')
 ```
 
 ### Loops
 
-Loops are used to execute a block of code repeatedly.
+Loops execute a block of code repeatedly. The primary loop construct in Coral is `iter`.
 
-#### For Loops
-
-Ideal for iterating over a sequence (like a range, list, or string).
-
-*   **Ranges:** Coral uses `start..end` for inclusive-start, exclusive-end ranges (like Python's `range(start, end)`), or `start...end` for inclusive-end ranges. Let's assume `x..y` means `x` up to `y-1`.
+*   **`iter collection_or_range:`**
+    The `iter` keyword iterates over a sequence. Common sequences include ranges (e.g., `0..5`) or lists. The current item in each iteration is implicitly available via the keyword `it`.
 
     ```coral
-    // Iterate from 0 up to (but not including) 5
-    for i in 0..5:
-        print(f"Number: {i}"); // Prints 0, 1, 2, 3, 4
+    // Iterating over a range: 0 up to (but not including) 5
+    print('Numbers in range 0..5:')
+    iter 0..5:
+        print('Number: {it}') // Prints 0, 1, 2, 3, 4
 
-    // Iterate through characters in a string
-    let greeting = "Hi";
-    for char in greeting:
-        print(char); // Prints H, i
+    // Iterating over a list (list syntax is `[item1, item2, ...]`)
+    NAMES is ["Alice", "Bob", "Charlie"]
+    print('Greeting names:')
+    iter NAMES:
+        print('Hello, {it}')
     ```
-
-*   **Collections:** You can iterate directly over elements in collections (which we'll cover in more detail later).
-
-    ```coral
-    // Assuming 'names' is a list or array-like structure
-    let names = ["Alice", "Bob", "Charlie"]; // Fictional list syntax for now
-    for name in names:
-        print(f"Hello, {name}");
-    ```
-
-#### While Loops
-
-Executes a block of code as long as a specified condition is `true`.
-
-```coral
-let count = 0;
-while count < 3:
-    print(f"While count is {count}");
-    count += 1; // Important to modify the condition variable
-
-// Output:
-// While count is 0
-// While count is 1
-// While count is 2
-```
+    **Note on "while" loops:** Coral prioritizes `iter` for most looping constructs. Traditional `while condition:` loops can be expressed using `iter` with conditional `break` statements or by iterating over a sequence generated based on a condition. This unified approach simplifies the language's syntax.
 
 ### Loop Control Statements
 
-*   **`break`:** Immediately exits the current loop.
+*   **`break`:** Immediately exits the current `iter` loop.
 
     ```coral
-    for i in 0..100:
-        if i == 3:
-            break; // Stop the loop when i is 3
-        print(i); // Prints 0, 1, 2
+    iter 0..100:
+        if it eq 3:
+            print('Breaking at 3.')
+            break
+        print(it) // Prints 0, 1, 2
     ```
 
 *   **`continue`:** Skips the rest of the current iteration and proceeds to the next one.
 
     ```coral
-    for i in 0..5:
-        if i == 2:
-            continue; // Skip printing when i is 2
-        print(i); // Prints 0, 1, 3, 4
+    iter 0..5:
+        if it eq 2:
+            print('(Skipping 2)')
+            continue
+        print(it) // Prints 0, 1, (Skipping 2), 3, 4
     ```
 
 ## 7. Functions
 
-Functions are blocks of reusable code that perform a specific task.
+Functions are reusable blocks of code that perform specific tasks.
 
 ### Definition
 
-Functions are defined using the `fn` keyword. Parameters can have type annotations, and return types are specified using `->`.
+Functions are defined using the `def` keyword, followed by the function name, parameters in parentheses (without type annotations), and a colon. The function body is indented. Types are inferred by the compiler.
 
 ```coral
-// Function that takes a String parameter and doesn't explicitly return a value
-fn greet(name: String) {
-    print(f"Hello, {name}!");
-}
+def greet(name):
+    message is 'Hello, {name}!'
+    print(message)
+    // No explicit return, defaults to (true, (0, ""))
 
-// Function that takes two Integer parameters and returns an Integer
-fn add(a: Integer, b: Integer) -> Integer {
-    return a + b;
-}
-
-// Calling functions
-greet("Coral Developer"); // Output: Hello, Coral Developer!
-
-let sum_result = add(5, 7);
-print(f"The sum is: {sum_result}"); // Output: The sum is: 12
+def add(a, b):
+    sum_val is a + b
+    return (sum_val, (0, "")) // Explicit success return
 ```
 
-### Return Values
+### Return Values and Error Handling
 
-*   The `return` keyword is used to send a value back from a function.
-*   If a function doesn't have an explicit `return` statement, or has a `return` without a value, it implicitly returns a special "nothing" value (often called `nil`, `null`, or `void`-equivalent in other languages; Coral might have `Nil` or `Unit`).
+A cornerstone of Coral's robustness and clarity is its **universal tuple return convention**. All functions and methods, whether built-in or user-defined, implicitly or explicitly return a 2-tuple: `(result, error_details)`.
+
+*   `result`: The actual result of the function's operation. Its type is inferred.
+*   `error_details`: This is itself a 2-tuple: `(error_id, error_description_string)`.
+    *   `error_id`: An integer. `0` signifies success. Any non-zero value indicates an error.
+    *   `error_description_string`: A string providing more information about the error. For success (when `error_id` is `0`), this is an empty string `""`.
+
+This consistent approach means error handling is always explicit and predictable, a key aspect of Coral's design where the language structure itself promotes robust code.
+
+**Common Return Patterns:**
+
+1.  **Successful operation with a value:**
+    ```coral
+    def calculate_area(width, height):
+        if width lte 0 or height lte 0:
+            // Return 'null' (or a specific "no value" marker) for the result part on error
+            return (null, (101, "Width and height must be positive."))
+        area is width * height
+        return (area, (0, "")) // Result is 'area', error_id is 0
+    ```
+
+2.  **Operation with no specific result value (e.g., performing an action):**
+    If a function completes without an explicit `return` statement, it automatically returns `(true, (0, ""))` to indicate successful completion of its action.
+
+    ```coral
+    def log_message(message_text):
+        print('LOG: {message_text}')
+        // Implicitly returns (true, (0, ""))
+    ```
+
+3.  **Operation fails:**
+    Return a specific `error_id` (non-zero) and a descriptive `error_description_string`. The `result` part of the tuple should usually be `null` or a sensible default if `null` is not appropriate for the function's potential return type.
+
+    ```coral
+    def find_user_data(user_id):
+        // ... logic to find user ...
+        if user_not_found: // some condition representing failure
+            return (null, (404, 'User not found with ID: {user_id}'))
+        // ...
+        // user_data_object = ...
+        return (user_data_object, (0, ""))
+    ```
+
+### Calling Functions and Handling Returns
+
+When calling a function, you destructure the returned tuple to access the result and error details. This makes error checking an explicit step.
 
 ```coral
-fn get_greeting(name: String) -> String {
-    if name == "":
-        return "Hello, anonymous!"; // Explicit return
-    // If name is not empty, this line is reached
-    return f"Greetings, {name}!";
-}
+(area_val, area_error_info) is calculate_area(10, 5)
 
-fn log_message(message: String) { // No explicit return type, implies returning 'Nil' or 'Unit'
-    print(message);
-    // No return keyword needed if nothing to return
-}
+if area_error_info.0 neq 0: // Check the error_id
+    print('Error calculating area: ID={area_error_info.0}, Message="{area_error_info.1}"')
+else:
+    print('Calculated Area is: {area_val}')
 
-let personalized_greeting = get_greeting("Evelyn");
-print(personalized_greeting); // Output: Greetings, Evelyn!
 
-log_message("System initialized."); // Prints "System initialized."
+(user_data, user_find_err) is find_user_data(123)
+if user_find_err.0 eq 0:
+    // Assuming user_data is an object or map with a 'name' key/attribute
+    print('Found user data for: {user_data.name}')
+else:
+    print('Failed to find user: {user_find_err.1}')
+
+// For functions that return (true, (0,"")) on implicit success:
+(op_status, log_op_err) is log_message("System initialized.")
+if log_op_err.0 neq 0:
+    print('Logging failed: {log_op_err.1}')
+// 'op_status' would be true if logging was successful.
 ```
 
-### Parameters
+### Anonymous Functions (Lambdas/Closures) - Brief Note
 
-Currently, we're focusing on positional parameters with optional type annotations, as shown in the examples above. Coral might also support named parameters or default parameter values in the future for more Python-like flexibility.
+While full `def` statements provide maximum clarity for function definitions, especially with Coral's tuple return system, the language might conceptually support a very concise syntax for simple, single-expression anonymous functions (lambdas) for specific use cases like arguments to some higher-order functions. Any such syntax would still adhere to the `(result, error_details)` return principle. For this guide, `def` is used for all function definitions to maintain clarity.
 
-### Anonymous Functions (Lambdas/Closures)
-
-Coral supports concise anonymous functions, often called lambdas or closures, ideal for simple operations or passing behavior as data. The syntax is `|parameters| -> return_type { body }` or `|parameters| expression_body` for a single expression.
-
-```coral
-// Lambda that takes two integers and returns their product
-let multiply = |x: Integer, y: Integer| -> Integer {
-    return x * y;
-};
-
-// Shorter form if the body is a single expression (return type can often be inferred)
-let square = |n: Integer| n * n;
-
-let product = multiply(6, 7);
-print(f"Product: {product}"); // Output: Product: 42
-
-let num_squared = square(5);
-print(f"5 squared: {num_squared}"); // Output: 5 squared: 25
-
-// Lambdas are useful for functions that accept other functions as arguments
-// (e.g., for list operations like map, filter - to be covered later)
-// fn process_numbers(numbers: List<Integer>, operation: |Integer| -> Integer) -> List<Integer> { ... }
-```
-
-This concludes the second part of Coral's language basics. With these concepts, you have a solid foundation for writing more complex Coral programs. Next, we'll explore collections, error handling, and more advanced features.
+This covers the core language basics for Coral. These rules aim to provide a consistent, expressive, and robust foundation, where the compiler handles much of the complexity, allowing developers to write clean and efficient code. Always refer to the official Coral documentation for the most complete and up-to-date specifications.

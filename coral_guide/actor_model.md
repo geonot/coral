@@ -1,166 +1,193 @@
 # Concurrency: The Actor Model
 
-Effective concurrency is crucial for modern applications, but traditional approaches using threads, locks, and shared memory are notoriously complex and error-prone, often leading to issues like race conditions and deadlocks. Coral addresses this challenge with a **built-in actor model**, designed for safe, scalable, and simplified concurrent programming.
-
-This actor model is deeply intertwined with Coral's **persistent object model**. This powerful combination aims to dramatically simplify the development of robust concurrent and distributed applications by handling both state persistence and concurrent access seamlessly.
+Effective concurrency is crucial for modern applications, but traditional approaches using threads, locks, and shared memory are notoriously complex and error-prone. Coral addresses this challenge with a **built-in actor model**, designed for safe, scalable, and simplified concurrent programming. This model is deeply intertwined with Coral's **transparent persistent object model**, where the Coral runtime and compiler handle much of the underlying complexity, allowing developers to focus on high-level application logic.
 
 ## 1. What is an Actor?
 
-At its core, an actor is an independent computational entity that encapsulates both state and behavior. The actor model is based on a few key principles:
+At its core, an actor is an independent computational entity that encapsulates both state and behavior. Key principles:
 
-*   **Isolation:** Each actor has its own private state. This state cannot be directly accessed or modified by other actors. This isolation is fundamental to preventing data races.
-*   **Message Passing (Abstracted):** Actors communicate by sending messages to each other. In Coral, this is often abstracted to look like asynchronous method calls on actor references. The system translates these calls into messages.
-*   **Asynchronous Processing:** Actors process messages (method calls) one at a time from an internal mailbox. This serialized processing of incoming requests ensures that an actor's internal state is never accessed concurrently by multiple threads, eliminating the need for manual locking.
+*   **Isolation:** Each actor has its own private state, inaccessible directly by others. This is fundamental to preventing data races.
+*   **Message Passing (Abstracted):** Actors communicate via asynchronous method calls on actor references. The Coral system translates these calls into messages, managing their dispatch and queuing.
+*   **Asynchronous Processing:** Actors process messages (method calls) from their internal mailbox one at a time. This serialized processing ensures that an actor's internal state is never accessed concurrently by multiple threads, eliminating the need for manual locking and simplifying concurrent state management.
 
-Think of actors as independent agents, each with their own responsibilities, their own private data, and a mailbox for receiving requests from other agents. They work autonomously and communicate without directly interfering with each other's internal workings.
+Think of actors as independent agents, each with their own responsibilities and private data, communicating cleanly without direct interference.
 
 ## 2. Defining Actors in Coral
 
-In Coral, actors are typically special kinds of persistent objects. You don't necessarily use a distinct `actor` keyword; instead, a class can be designated as an actor, often implicitly through its usage or via an annotation like `@persistent` which also implies actor-like concurrent behavior.
-
-The "messages" an actor handles are its public methods. When a method is called on an actor reference from outside, Coral's runtime treats it as an asynchronous message being sent to that actor.
+In Coral, actors are typically persistent objects. A class can be designated as an actor using the `@persistent` decorator. Its public methods become the "messages" it handles. All methods adhere to Coral's standard `(result, (error_id, "description"))` tuple return convention.
 
 ```coral
 @persistent // Marks this class as a persistent object, managed by the actor system
-class UserAccount {
-    private owner_name: String;
-    private balance: Float;
-    private transaction_log: List<String>; // Assuming List is a persistent collection
+class UserAccount:
+    _owner_name is "" // Internal state, conventionally private
+    _balance is 0.0
+    _transaction_log is [] // Represents a list of transaction strings
 
     // Constructor
-    fn init(owner: String, initial_deposit: Float) {
-        this.owner_name = owner;
-        this.balance = initial_deposit;
-        this.transaction_log = []; // Initialize with an empty log
-        this._log_event(f"Account created for {owner} with initial balance: ${initial_deposit}");
-    }
+    def init(this, owner_name_val, initial_deposit_val):
+        this._owner_name is owner_name_val
+        if initial_deposit_val lt 0.0:
+            // Actor init methods also return (this_or_null, error_tuple)
+            return (null, (1, "Initial deposit cannot be negative"))
+        this._balance is initial_deposit_val
+        this._transaction_log is [] // Initialize with an empty log
+        // Call to internal method, also returns a tuple (error handling omitted for brevity here)
+        this._log_event('Account created for {owner_name_val} with initial balance: ${initial_deposit_val}')
+        return (this, (0, "")) // Successful init returns the instance
 
     // Public method, acts as a message handler when called externally
-    pub fn deposit(this, amount: Float) {
-        if amount <= 0.0 {
-            print(f"Error: Deposit amount must be positive for account {this.id()}.");
-            return; // Or throw an error
-        }
-        this.balance += amount;
-        this._log_event(f"Deposited ${amount}. New balance: ${this.balance}.");
-    }
+    def deposit(this, amount_val):
+        if amount_val lte 0.0:
+            // print('Error: Deposit amount must be positive for account {this.id()}.') // Assuming this.id()
+            return (this, (101, "Deposit amount must be positive")) // Return 'this' even on logical error
+        this._balance is this._balance + amount_val
+        this._log_event('Deposited ${amount_val}. New balance: ${this._balance}.')
+        return (this, (0, "")) // Default success return for instance methods primarily causing side effects
 
-    // Another public method
-    pub fn withdraw(this, amount: Float) -> Boolean {
-        if amount <= 0.0 {
-            print(f"Error: Withdrawal amount must be positive for account {this.id()}.");
-            return false;
-        }
-        if this.balance >= amount {
-            this.balance -= amount;
-            this._log_event(f"Withdrew ${amount}. New balance: ${this.balance}.");
-            return true;
-        } else {
-            this._log_event(f"Failed withdrawal of ${amount}. Insufficient funds.");
-            return false;
-        }
-    }
+    def withdraw(this, amount_val):
+        if amount_val lte 0.0:
+            return (false, (102, "Withdrawal amount must be positive")) // Explicit boolean result
+        if this._balance gte amount_val:
+            this._balance is this._balance - amount_val
+            this._log_event('Withdrew ${amount_val}. New balance: ${this._balance}.')
+            return (true, (0, "")) // Explicit boolean result
+        else:
+            this._log_event('Failed withdrawal of ${amount_val}. Insufficient funds.')
+            return (false, (103, "Insufficient funds"))
 
-    pub fn get_balance(this) -> Float {
-        this._log_event("Balance requested.");
-        return this.balance;
-    }
+    def get_balance(this):
+        this._log_event("Balance requested.")
+        return (this._balance, (0, "")) // Explicitly return the balance value
 
-    pub fn get_transaction_history(this) -> List<String> {
-        return this.transaction_log.copy(); // Return a copy to maintain encapsulation
-    }
+    def get_transaction_history(this):
+        // Return a copy to maintain encapsulation.
+        // For a simple list of strings, direct copy is fine.
+        // More complex persistent collections might have specific cloning methods.
+        return (this._transaction_log, (0, ""))
 
-    // Internal helper method, not directly callable as a message from outside
-    private fn _log_event(this, event_details: String) {
-        let timestamp = Time.now_string(); // Assume a Time utility
-        this.transaction_log.add(f"[{timestamp} - ID: {this.id()}] {event_details}");
-    }
+    // Internal helper method
+    def _log_event(this, event_details_str):
+        // timestamp_str is Time.now_string().0 // Assume a Time utility, .0 to get value
+        // For simplicity, we'll just add the event details.
+        // For high-frequency updates on large persistent lists, Coral's standard library
+        // might offer optimized persistent collection types and methods.
+        this._transaction_log is this._transaction_log + ['{event_details_str}'] // Immutable-style list update
+        return (true, (0, "")) // Success for the logging action
 
-    // Actors/persistent objects might have a system-provided unique ID
-    // fn id(this) -> ActorId; // Conceptually provided by the system
-}
+    // Actors/persistent objects might have a system-provided unique ID, e.g.:
+    // def id(this): return (system_provided_id_value, (0,""))
 ```
-In this example, `UserAccount` objects, when managed by Coral's persistence and concurrency layer, behave as actors. Their methods `deposit`, `withdraw`, `get_balance`, etc., become the "messages" they can process.
+Instances of `UserAccount`, when managed by Coral's persistence and concurrency layer, behave as actors.
 
 ## 3. Creating and Interacting with Actors
 
 ### Spawning Actors
 
-Creating an actor is similar to instantiating a regular object. If the class is marked for persistence (and thus actor behavior), the system handles its registration within the actor environment.
+Creating an actor is like instantiating any other Coral class. If the class is marked `@persistent`, the Coral runtime automatically handles its registration within the actor environment and its persistence.
 
 ```coral
-// Spawning a new UserAccount actor
-let alice_account = UserAccount.new("Alice Wonderland", 1000.0);
-let bob_account = UserAccount.new("Bob The Builder", 500.0);
+// Spawning new UserAccount actors
+(alice_account, alice_err) is UserAccount("Alice Wonderland", 1000.0)
+(bob_account, bob_err) is UserAccount("Bob The Builder", 500.0)
+
+if alice_err.0 neq 0:
+    print('Error creating Alice account: {alice_err.1}')
+if bob_err.0 neq 0:
+    print('Error creating Bob account: {bob_err.1}')
 ```
-Each call to `UserAccount.new(...)` creates a new independent actor with its own state and mailbox.
+Each successful call to `UserAccount(...)` creates a new, independent actor.
 
 ### Asynchronous Method Calls (Message Passing)
 
-Interacting with an actor looks like calling methods on its reference. These calls are inherently **asynchronous**.
+Interacting with an actor involves calling its methods. These calls are inherently **asynchronous** and return a `Future`. This `Future` will eventually resolve to the standard Coral `(result, error_details)` tuple that the method itself returns. This design allows the caller to continue execution without waiting, promoting responsiveness.
 
-*   **Fire-and-Forget:** If a method doesn't return a value (or you don't immediately need its result), the call is "fire-and-forget." Your code continues executing while the actor processes the request at some point in the future.
-
-    ```coral
-    alice_account.deposit(200.0); // Asynchronously sends a "deposit" message
-    bob_account.withdraw(50.0);   // Asynchronously sends a "withdraw" message
-    print("Deposit and withdrawal requests sent."); // This line executes immediately
-    ```
-
-*   **Calls with Return Values (Futures/Promises):** If an actor method returns a value, the asynchronous call will immediately return a **Future** (or **Promise**). A Future is a placeholder for a value that will be available later.
+*   **Calls with "Fire-and-Forget" Style Intent:**
+    Even if a method like `deposit` returns `(this, (0,""))`, the call is still asynchronous. You receive a `Future`. If you don't immediately need to confirm completion or handle the result, you might not `await` the future right away.
 
     ```coral
-    let future_balance_alice = alice_account.get_balance(); // Returns a Future<Float>
-    let future_withdrawal_status = bob_account.withdraw(100.0); // Returns a Future<Boolean>
+    if alice_err.0 eq 0: // Assuming alice_account was created successfully
+        future_deposit_outcome is alice_account.deposit(200.0)
+        // future_deposit_outcome is a Future that will resolve to (UserAccount_instance, (Int, String))
+        // The code continues executing. The deposit happens concurrently.
+        // One might later await future_deposit_outcome if confirmation is needed.
 
-    print("Balance and withdrawal requests sent; results are pending in futures.");
+    if bob_err.0 eq 0:
+        future_withdraw_outcome is bob_account.withdraw(50.0)
+        // future_withdraw_outcome is a Future that will resolve to (Boolean_value, (Int, String))
+
+    print("Deposit and withdrawal requests sent; operations are pending completion by actors.")
     ```
 
-    To get the actual value from a Future, you typically need to use an `await` keyword within an `async` function (if Coral supports async/await syntax) or use callback mechanisms.
+*   **Calls with Anticipated Return Values (Futures):**
+    When an actor method is designed to return a specific value (e.g., `get_balance`), the asynchronous call returns a `Future` that will resolve to `(the_value, (0,""))` on success, or an error tuple.
+
+    ```coral
+    if alice_err.0 eq 0:
+        future_balance_alice is alice_account.get_balance()
+        // future_balance_alice is a Future that will resolve to (Float_value, (Int, String))
+
+    print("Balance request for Alice sent; result is pending in a future.")
+    ```
+
+    To get the actual `(result, error_details)` tuple from a `Future`, you typically use an `await` keyword within an `async def` function (Coral's specific syntax for defining and running `async` functions is conceptual here, but the `await` pattern is key).
 
     ```coral
     // Hypothetical usage with async/await
-    async fn perform_transactions_and_check() {
-        alice_account.deposit(150.0);
-        bob_account.deposit(75.0);
+    async def perform_transactions_and_check():
+        // Assume alice_account and bob_account are valid actor references from successful creation
 
-        let alice_current_balance = await alice_account.get_balance();
-        print(f"Alice's current balance: ${alice_current_balance}");
+        alice_account.deposit(150.0) // Fire-and-forget style for this example
+        bob_account.deposit(75.0)
 
-        let bobs_withdrawal_succeeded = await bob_account.withdraw(200.0);
-        if bobs_withdrawal_succeeded {
-            print("Bob's withdrawal of $200 was successful.");
-        } else {
-            print("Bob's withdrawal of $200 failed.");
-        }
+        // Call get_balance and await the future's resolution
+        // The 'await' keyword "pauses" execution of this async function here until the future resolves.
+        (resolved_alice_balance_tuple, future_sys_err_alice) is await alice_account.get_balance()
 
-        let bobs_final_balance = await bob_account.get_balance();
-        print(f"Bob's final balance: ${bobs_final_balance}");
-    }
+        if future_sys_err_alice.0 eq 0: // Check if the Future itself resolved without system error
+            (balance_val, method_err_alice) is resolved_alice_balance_tuple // Unpack method's return
+            if method_err_alice.0 eq 0:
+                print('Alice''s current balance: ${balance_val}')
+            else:
+                print('Error from get_balance method: {method_err_alice.1}')
+        else:
+            // This indicates a system-level issue with the future or actor communication
+            print('System error resolving future_balance_alice: {future_sys_err_alice.1}')
 
-    // To run an async function:
-    // Scheduler.run(perform_transactions_and_check()); // Conceptual scheduler
+
+        (resolved_bob_withdrawal_tuple, future_sys_err_bob) is await bob_account.withdraw(200.0)
+        if future_sys_err_bob.0 eq 0:
+            (withdrawal_succeeded, method_err_bob) is resolved_bob_withdrawal_tuple
+            if method_err_bob.0 eq 0:
+                if withdrawal_succeeded:
+                    print('Bob''s withdrawal of $200 was successful.')
+                else:
+                    print('Bob''s withdrawal of $200 failed (as per method logic).') // e.g. insufficient funds
+            else:
+                print('Error from withdraw method: {method_err_bob.1}')
+        else:
+            print('System error resolving future_bob_withdrawal: {future_sys_err_bob.1}')
+
+        // (run_op_result, run_op_err) is Scheduler.run(perform_transactions_and_check()) // Conceptual scheduler
     ```
-
-Under the hood, each method call on an actor reference is transformed into a message. This message is placed in the target actor's mailbox. The actor processes messages from its mailbox sequentially, ensuring that only one method executes at a time, thus guaranteeing serialized access to its internal state.
+The Coral runtime ensures that each actor processes messages from its mailbox sequentially, guaranteeing serialized access to its internal state, thus simplifying concurrent programming logic.
 
 ## 4. State Management
 
-As highlighted, an actor's state (its attributes) is strictly private and protected from any direct external access. All modifications to an actor's state can *only* occur as a result of the actor itself processing a message (i.e., executing one of its own methods). This disciplined, serialized access to state is the cornerstone of the actor model's safety, eliminating race conditions without requiring manual locks.
+An actor's state (its attributes) is strictly private. Modifications occur *only* when the actor processes a message (i.e., executes one of its own methods). This disciplined, serialized access to state is the cornerstone of the actor model's safety, eliminating race conditions without requiring manual locks from the developer.
 
 ## 5. Benefits of Coral's Actor Model
 
-*   **Simplified Concurrency:** Developers work with familiar object-oriented method calls, largely freed from the complexities of manual thread management, locks, semaphores, or mutexes.
-*   **Safety by Design:** The model inherently prevents data races on actor state because of state isolation and serialized message processing.
-*   **Scalability:** Actors are lightweight and independent. An application can consist of millions of actors. The Coral runtime could potentially distribute actors across multiple CPU cores or even (conceptually) across different machines in a cluster, enhancing scalability.
-*   **Fault Tolerance (Conceptual):** Actor systems often incorporate supervision hierarchies. If an actor encounters an error, its supervisor can decide how to handle it (e.g., restart the actor, escalate the error). Coral could provide default supervision strategies or allow developers to define custom ones, contributing to more resilient applications (this is a more advanced topic).
+*   **Simplified Concurrency:** Developers work with familiar object-oriented method calls. The Coral runtime handles the complexities of message passing, queuing, and thread management.
+*   **Safety by Design:** State isolation and serialized message processing inherently prevent data races on actor state.
+*   **Scalability:** Actors are designed to be lightweight and independent. An application can potentially consist of millions of actors. The Coral runtime could distribute actors across multiple CPU cores or even (conceptually) across different machines in a cluster.
+*   **Fault Tolerance (Conceptual):** Actor systems often incorporate supervision hierarchies. If an actor encounters an error, its supervisor can decide how to handle it (e.g., restart the actor, escalate the error). Coral could provide default supervision strategies or allow developers to define custom ones.
 
 ## 6. Actors and the Persistent Object Model
 
-The true power of Coral's approach lies in the seamless integration of its actor model with its **persistent object model**. In essence:
+The true power of Coral's approach lies in the seamless integration of its actor model with its **transparent persistent object model**. In essence:
 
 *   **Persistent Objects *are* (or can be) Actors:** When you define a class as `@persistent`, its instances are not only managed for concurrency as actors but their state is also automatically persisted by the Coral runtime.
-*   **Effortless Persistence:** There's no need to write separate code for database interaction (saving, loading, updating actor state). If `alice_account.deposit(100.0)` is called, the change to `alice_account.balance` is eventually made durable automatically. Even if the application restarts, Alice's account will reflect its last known state.
-*   **Simplified Development:** This unified model means developers can focus on business logic and interactions, while Coral handles the underlying complexities of concurrent access and data persistence. You design your objects and their interactions, and Coral ensures they can run concurrently and their state endures.
+*   **Effortless Persistence:** Developers are freed from writing separate code for database interaction (saving, loading, updating actor state). If `alice_account.deposit(100.0)` is called, the change to `alice_account._balance` is eventually made durable automatically by the Coral system. Even if the application restarts, Alice's account will reflect its last known state.
+*   **Simplified Development:** This unified model means developers can focus on business logic and interactions. Coral handles the underlying complexities of both concurrent access and data persistence, leading to a more productive and joyful development experience.
 
-By unifying concurrency and persistence through this actor-based approach, Coral aims to provide an exceptionally productive and robust platform for building sophisticated, stateful applications.
+By unifying concurrency and persistence through this actor-based approach, Coral aims to provide an exceptionally robust and developer-friendly platform for building sophisticated, stateful applications.

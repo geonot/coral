@@ -1,1 +1,0 @@
-/home/rome/Code/coral/target/release/coral-lsp: /home/rome/Code/coral/src/ast.rs /home/rome/Code/coral/src/interpreter.rs /home/rome/Code/coral/src/lexer.rs /home/rome/Code/coral/src/lib.rs /home/rome/Code/coral/src/lsp.rs /home/rome/Code/coral/src/lsp_main.rs /home/rome/Code/coral/src/parser.rs /home/rome/Code/coral/src/semantic.rs /home/rome/Code/coral/src/token.rs

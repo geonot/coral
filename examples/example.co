@@ -1,0 +1,33 @@
+# Coral Language Example
+message is 'Hello, Coral!'
+count is 42
+
+fn greet with name, greeting ? 'Hello' # Added ? for default value
+    '{greeting}, {name}!'
+
+object user
+    name
+    email
+    age ? 0
+    
+    introduce
+        'Hi, I am {name}'
+
+store task
+    description
+    priority ? 1
+    complete ? no
+    
+    make
+        log (create $description $priority) # Assuming create takes space-separated args, and log takes one expression
+
+# Test the language
+greeting is greet('World') # Use parentheses for function call
+log greeting
+
+# Create a user
+person is user
+person.name is 'Alice'
+person.age is 30
+intro is person.introduce
+log intro

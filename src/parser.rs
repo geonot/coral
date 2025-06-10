@@ -888,9 +888,35 @@ impl Parser {
                 self.next_token();
                 continue;
             }
-            
-            if let TokenType::Identifier(name) = &self.current_token.kind {
-                let item_name = name.clone();
+
+            match &self.current_token.kind {
+                TokenType::Make => {
+                    let make_line = self.current_token.line;
+                    let make_col = self.current_token.col;
+                    self.next_token(); // consume 'make'
+
+                    // Check for duplicate 'make' method
+                    if methods.iter().any(|m| m.name == "make") {
+                        self.errors.push(ParseError {
+                            message: "Duplicate 'make' method defined for object".to_string(),
+                            line: make_line,
+                            col: make_col,
+                            length: Some("make".len()),
+                            error_type: ErrorType::SemanticError,
+                        });
+                    }
+
+                    let body = self.parse_block()?;
+                    methods.push(MethodDef {
+                        name: "make".to_string(),
+                        parameters: Vec::new(), // EBNF for make_method shows no params in its definition
+                        body,
+                    });
+                    prop_names.insert("make".to_string()); // Track 'make' to avoid name collision
+                    self.skip_newlines();
+                }
+                TokenType::Identifier(name) => {
+                    let item_name = name.clone();
                 let item_line = self.current_token.line;
                 let item_col = self.current_token.col;
                 self.next_token();
@@ -971,19 +997,27 @@ impl Parser {
                 
                 // Skip newlines after property/method definition
                 self.skip_newlines();
-            } else {
-                return Err(self.make_error(
-                    "Expected property or method name".to_string(),
-                    ErrorType::UnexpectedToken
-                ));
             }
+            _ => {
+                 // If it's not 'make' or an Identifier, it's an error or end of block
+                if !self.current_token_is(&TokenType::Dedent) && !self.current_token_is(&TokenType::Eof) {
+                    return Err(self.make_error(
+                        format!("Expected property, method name, or 'make', found {:?}", self.current_token.kind),
+                        ErrorType::UnexpectedToken
+                    ));
+                }
+                break; // Exit loop if dedent or eof or other unexpected token
+            }
+          } // end match
         }
         
         if self.current_token_is(&TokenType::Dedent) {
             // Don't consume DEDENT here - let parse_program handle it
+            // Or, if parse_block is expected to consume it, adjust accordingly.
+            // Current parse_block does consume it if it's the last thing.
         }
         
-        self.scope = *object_scope.parent.unwrap_or(Box::new(Scope::new()));
+        self.scope = *object_scope.parent.unwrap_or_else(|| Box::new(Scope::new()));
         Ok((properties, methods))
     }
 
@@ -1270,24 +1304,11 @@ impl Parser {
                 } else if matches!(&self.current_token.kind,
                     TokenType::Integer(_) | TokenType::Float(_) | TokenType::StringLiteral(_) |
                     TokenType::InterpolatedString(_) | TokenType::Boolean(_) | TokenType::Identifier(_) |
-                    TokenType::LBracket | TokenType::ParameterRef(_)) {
-                    // Check if this is a method call like "collection add item"
-                    if let TokenType::Identifier(potential_method) = &self.current_token.kind {
-                        let method_name = potential_method.clone();
-                        if matches!(method_name.as_str(), "add" | "remove" | "contains" | "length" | "size") {
-                            self.next_token(); // consume method name
-                            let (args, named_args) = self.parse_argument_list()?;
-                            return Ok(Expression::MethodCall {
-                                object: Box::new(Expression::Identifier(name)),
-                                method: method_name,
-                                args,
-                                named_args,
-                                force_call: false,
-                                chaining: None,
-                            });
-                        }
-                    }
-                    // Space-separated function call
+                    TokenType::LBracket | TokenType::ParameterRef(_) | TokenType::LParen) { // Added LParen here for consistency
+                    // Space-separated function call or instantiation without 'with' or '!'
+                    // The distinction between function call and instantiation without 'with'/'!'
+                    // might need semantic analysis if constructors can be called like functions.
+                    // For now, assume it's a function call if not explicitly an instantiation.
                     let (args, named_args) = self.parse_argument_list()?;
                     Ok(Expression::FunctionCall { name, args, named_args })
                 } else {

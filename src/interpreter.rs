@@ -298,39 +298,93 @@ impl Interpreter {
             }
             
             Expression::MethodCall { object, method, args, named_args: _, force_call: _, chaining: _ } => {
-                let obj_val = self.eval_expression(object)?;
-                
+                // Evaluate the object expression first
+                let mut obj_val = self.eval_expression(object)?; // Use mut if we might modify it (for future env updates)
+
+                // Note: For true mutability of collections stored in variables, this logic would need to:
+                // 1. Check if 'object' is an Identifier.
+                // 2. If so, operate on the value from the environment and then use `self.environment.set()`.
+                // For now, operations return new Value instances or operate on copies.
+
                 match method.as_str() {
                     "push" | "add" => {
-                        if let Value::Array(mut arr) = obj_val {
-                            if let Some(arg) = args.first() {
-                                let item = self.eval_expression(arg)?;
-                                arr.push(item);
-                                Ok(Value::Array(arr))
-                            } else {
-                                Err(RuntimeError::ArgumentMismatch("push requires an argument".to_string()))
+                        if let Value::Array(mut arr_copy) = obj_val.clone() { // Operate on a clone for now
+                            if args.len() != 1 {
+                                return Err(RuntimeError::ArgumentMismatch(format!("'{method}' expects 1 argument, got {}", args.len())));
                             }
+                            let item_val = self.eval_expression(&args[0])?;
+                            arr_copy.push(item_val);
+                            Ok(Value::Array(arr_copy)) // Returns a new array
                         } else {
-                            Err(RuntimeError::TypeMismatch("push can only be called on arrays".to_string()))
+                            Err(RuntimeError::TypeMismatch(format!("'{method}' can only be called on arrays")))
                         }
                     }
                     "pop" => {
-                        if let Value::Array(mut arr) = obj_val {
-                            arr.pop().ok_or(RuntimeError::InvalidOperation("Cannot pop from empty array".to_string()))
+                        if let Value::Array(mut arr_copy) = obj_val.clone() { // Operate on a clone
+                            if !args.is_empty() {
+                                return Err(RuntimeError::ArgumentMismatch(format!("'{method}' expects 0 arguments, got {}", args.len())));
+                            }
+                            arr_copy.pop().ok_or_else(|| RuntimeError::InvalidOperation(format!("Cannot '{method}' from empty array")))
+                            // Ok(popped_value) - this is fine, pop returns the value
+                            // If we were to modify in place: self.environment.set(obj_name, Value::Array(arr_copy))
                         } else {
-                            Err(RuntimeError::TypeMismatch("pop can only be called on arrays".to_string()))
+                            Err(RuntimeError::TypeMismatch(format!("'{method}' can only be called on arrays")))
                         }
                     }
                     "length" | "size" => {
+                        if !args.is_empty() {
+                            return Err(RuntimeError::ArgumentMismatch(format!("'{method}' expects 0 arguments, got {}", args.len())));
+                        }
                         match obj_val {
                             Value::Array(arr) => Ok(Value::Integer(arr.len() as i64)),
                             Value::String(s) => Ok(Value::Integer(s.len() as i64)),
-                            _ => Err(RuntimeError::TypeMismatch("length can only be called on arrays or strings".to_string()))
+                            _ => Err(RuntimeError::TypeMismatch(format!("'{method}' can only be called on arrays or strings")))
                         }
                     }
+                    "contains" => {
+                        if let Value::Array(arr) = &obj_val {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::ArgumentMismatch(format!("'{method}' expects 1 argument, got {}", args.len())));
+                            }
+                            let item_to_find = self.eval_expression(&args[0])?;
+                            Ok(Value::Boolean(arr.contains(&item_to_find)))
+                        } else {
+                            Err(RuntimeError::TypeMismatch(format!("'{method}' can only be called on arrays")))
+                        }
+                    }
+                    "remove_at" => { // Assuming 'remove' means remove_at for now
+                        if let Value::Array(mut arr_copy) = obj_val.clone() {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::ArgumentMismatch(format!("'{method}' expects 1 argument (index), got {}", args.len())));
+                            }
+                            let index_val = self.eval_expression(&args[0])?;
+                            if let Value::Integer(idx) = index_val {
+                                if idx < 0 || idx as usize >= arr_copy.len() {
+                                    return Err(RuntimeError::IndexOutOfBounds);
+                                }
+                                arr_copy.remove(idx as usize);
+                                Ok(Value::Array(arr_copy)) // Returns a new array
+                            } else {
+                                Err(RuntimeError::TypeMismatch("Array index must be an integer".to_string()))
+                            }
+                        } else {
+                            Err(RuntimeError::TypeMismatch(format!("'{method}' can only be called on arrays")))
+                        }
+                    }
+                    // Placeholder for user-defined methods on objects
+                    // This would involve looking up 'method' in the object's definition (if Value::Object stored methods or a type link)
+                    // and then calling it similar to how functions are called.
                     _ => {
-                        // For other methods, return the object for now
-                        Ok(obj_val)
+                        // If it's not a built-in array/string method, and if obj_val is an Object,
+                        // we would eventually look for user-defined methods here.
+                        // For now, if not a recognized built-in, assume it's an error or a field access (if no args).
+                        if args.is_empty() {
+                             // Attempt to access a field if obj_val is an Object
+                            if let Value::Object(map) = obj_val {
+                                return map.get(method).cloned().ok_or_else(|| RuntimeError::InvalidOperation(format!("Method or field '{}' not found on object", method)));
+                            }
+                        }
+                        Err(RuntimeError::InvalidOperation(format!("Method '{}' not found or not applicable", method)))
                     }
                 }
             }

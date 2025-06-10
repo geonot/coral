@@ -1,0 +1,214 @@
+program = { statement } ;
+
+statement = assignment
+          | function_definition
+          | object_definition
+          | store_definition
+          | actor_definition
+          | method_call_statement
+          | function_call_statement
+          | control_flow_statement
+          | error_handling_statement
+          | use_statement
+          | expression_statement
+          | comment ;
+
+(* Comments *)
+comment = single_comment | doc_comment ;
+single_comment = "#" { any_character_except_newline } newline ;
+doc_comment = "##" { any_character_except_newline } newline ;
+
+(* Basic assignment *)
+assignment = identifier "is" expression ;
+
+(* Expressions *)
+expression = ternary_expression ;
+
+ternary_expression = logical_or_expression [ "?" expression "!" expression ] ;
+
+logical_or_expression = logical_and_expression { ( "or" | "||" ) logical_and_expression } ;
+
+logical_and_expression = equality_expression { ( "and" | "&&" ) equality_expression } ;
+
+equality_expression = comparison_expression { ( "==" | "!=" | "equals" ) comparison_expression } ;
+
+comparison_expression = additive_expression { ( "gt" | "lt" | "gte" | "lte" | ">=" | "<=" ) additive_expression } ;
+
+additive_expression = multiplicative_expression { ( "+" | "-" ) multiplicative_expression } ;
+
+multiplicative_expression = power_expression { ( "*" | "/" | "%" ) power_expression } ;
+
+power_expression = unary_expression [ "**" power_expression ] ;
+
+unary_expression = ( "!" | "-" | "~" ) unary_expression | postfix_expression ;
+
+postfix_expression = primary_expression { postfix_operator } ;
+
+postfix_operator = method_call
+                 | array_access
+                 | as_conversion
+                 | error_handling ;
+
+primary_expression = literal
+                   | identifier
+                   | parameter_reference
+                   | array_literal
+                   | object_literal
+                   | parenthesized_expression
+                   | instantiation
+                   | function_call
+                   | built_in_operation ;
+
+(* Literals *)
+literal = string_literal | number_literal | boolean_literal | empty_literal | now_literal ;
+
+string_literal = single_quote_string | double_quote_string ;
+single_quote_string = "'" { string_char | interpolation } "'" ;
+double_quote_string = '"' { string_char | interpolation | newline } '"' ;
+interpolation = "{" expression "}" ;
+
+number_literal = integer | float ;
+integer = digit { digit } ;
+float = digit { digit } "." digit { digit } ;
+
+boolean_literal = "yes" | "no" | "true" | "false" ;
+
+array_literal = "[" [ expression { "," expression } ] "]" ;
+
+empty_literal = "empty" | "[]" ;
+now_literal = "now" ;
+
+(* Object literals *)
+object_literal = property_assignment { property_assignment } ;
+property_assignment = identifier "is" expression ;
+
+(* Identifiers and references *)
+identifier = letter { letter | digit | "_" } ;
+parameter_reference = "$" ( identifier | integer | "$" ) ;
+
+(* Array access *)
+array_access = ( "at" expression | "@" expression | "[" expression "]" ) ;
+
+(* Method calls *)
+method_call = "." method_name [ "!" ] [ argument_list ] [ method_chaining ] ;
+method_name = identifier ;
+method_chaining = ( "then" | "and" ) "." method_name [ "!" ] [ argument_list ] [ method_chaining ] ;
+
+(* Function calls *)
+function_call = identifier [ argument_list ] ;
+function_call_statement = function_call ;
+
+(* Instantiation *)
+instantiation = identifier [ "!" ] [ argument_list ]
+              | identifier "with" named_argument_list ;
+
+(* Arguments *)
+argument_list = expression { expression }
+              | "(" [ expression { "," expression } ] ")" ;
+
+named_argument_list = named_argument { "," named_argument } ;
+named_argument = identifier expression ;
+
+(* Function definitions *)
+function_definition = "fn" identifier "with" parameter_list [ indented_block ] ;
+parameter_list = [ parameter { "," parameter } ] ;
+parameter = identifier [ default_value ] ;
+default_value = literal ;
+
+(* Object definitions *)
+object_definition = "object" identifier [ indented_block ] ;
+
+(* Store definitions *)
+store_definition = "store" identifier [ indented_block ] ;
+
+(* Actor definitions *)
+actor_definition = "store" "actor" identifier [ indented_block ] ;
+
+(* Object/Store/Actor body content *)
+indented_block = newline indent body_content dedent ;
+body_content = { property_definition | method_definition | join_table_reference | message_handler | as_method_definition | make_method } ;
+
+property_definition = identifier [ "?" default_value ] [ doc_comment ] newline ;
+method_definition = identifier [ parameter_list ] [ indented_block ] ;
+join_table_reference = "&" identifier newline ;
+message_handler = "@" identifier [ parameter_list ] [ indented_block ] ;
+as_method_definition = ( "as" conversion_type | "as_" identifier ) [ indented_block ] ;
+
+(* Special method definitions *)
+make_method = "make" [ indented_block ] ;
+
+(* Control flow *)
+control_flow_statement = unless_statement | if_statement | while_loop | until_loop | iteration | push_statement ;
+
+unless_statement = "unless" expression statement_block
+                 | statement "unless" expression ;
+
+if_statement = "if" expression statement_block [ "else" statement_block ] ;
+
+while_loop = "while" expression statement_block ;
+
+until_loop = "until" identifier [ "from" expression ] [ "by" expression ] "is" expression statement_block ;
+
+iteration = across_iteration | iterate_statement ;
+across_iteration = expression "across" expression [ "with" named_argument_list ] [ "into" identifier ] ;
+iterate_statement = "iterate" expression expression [ parameter_reference ] ;
+
+push_statement = "push" expression "on" expression ;
+
+statement_block = indented_block | single_statement ;
+single_statement = statement ;
+
+(* Error handling *)
+error_handling = "err" error_action ;
+error_handling_statement = expression error_handling ;
+error_action = "log" "return"
+             | default_value
+             | "return" "log" "err" ;
+
+(* Data conversion *)
+as_conversion = "as" conversion_type ;
+conversion_type = "string" | "map" | "list" | identifier ;
+
+(* Use statements *)
+use_statement = "use" module_list ;
+module_list = module_name { "," module_name } ;
+module_name = identifier { "." identifier } ;
+
+(* Built-in operations *)
+built_in_operation = log_operation | hash_operation | load_operation | create_operation | update_operation ;
+log_operation = "log" expression ;
+hash_operation = "hash" "." hash_algorithm expression ;
+hash_algorithm = "blake3" | identifier ;
+load_operation = "load" expression ;
+create_operation = "create" [ expression_list ] ;
+update_operation = "update" expression [ expression_list ] ;
+expression_list = expression { expression } ;
+
+(* Expression statements *)
+expression_statement = expression ;
+method_call_statement = expression method_call ;
+
+(* Parenthesized expressions *)
+parenthesized_expression = "(" expression ")" ;
+
+(* Indentation handling *)
+indent = ? increase in indentation level ? ;
+dedent = ? decrease in indentation level ? ;
+newline = ? newline character ? ;
+
+(* Lexical elements *)
+letter = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" 
+       | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z"
+       | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M"
+       | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" ;
+
+digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+
+string_char = ? any character except quote and newline (unless escaped) ? ;
+any_character_except_newline = ? any character except newline ? ;
+
+(* Keywords that are reserved *)
+(* fn, object, store, actor, is, as, with, use, make, return *)
+(* if, else, unless, while, until, for, in, across, into, iterate *)
+(* gt, lt, equals, gte, lte, yes, no, true, false *)
+(* log, empty, now, at, err, then, and, or, push, pop *)

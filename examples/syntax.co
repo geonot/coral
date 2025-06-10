@@ -1,0 +1,203 @@
+store task
+    description
+    priority ? 1
+    complete ? false
+
+    make
+        # Assuming 'return' is a statement and 'log' takes one expression.
+        # 'create' takes space-separated expressions for its list.
+        return log (create $description $priority $complete)
+
+    complete # Method of task store
+        id # Parameter 'id', default value removed as $id is not a literal
+        return log (update $id complete true) # Assuming 'update' is like 'create'
+
+task1 is task with description 'Implement command-oriented persistence'
+task2 is task with description 'Write documentation'
+
+task1.complete() # Assuming method call with no user-args needs ()
+task1.complete(2) # Or task.complete with id 2, if 'complete' takes an ID.
+
+
+message is 'hello coral'
+ITERATIONS is 100
+threshold is 0.95
+SYSTEM_ACTIVE is true
+PI is 3.1415926535
+
+# Function calls (must use parentheses for arguments now)
+# calculate_value 10, 20  # Original, needs fixing
+# process_further result # Original, needs fixing
+# Assuming definition: fn calculate_value with v1, v2
+# Assuming definition: fn process_further with data
+val is calculate_value(10, 20)
+process_further(val)
+
+primes is [2, 3, 5, 7, 11]
+pending_tasks is []
+pending_tasks.add('todo 1') # Corrected collection method call
+first_prime is primes at 0 # 'at' syntax is valid
+
+net_config is {} # Valid empty object literal
+# LHS of assignment 'is' must be identifier by current grammar.
+# The following are syntactically problematic for 'is':
+# net_config.host is 'localhost'
+# net_config.port is 5000
+# For now, let's assume they are set via methods or direct instantiation if possible,
+# or the language would need a different assignment operator or rule for field assignment.
+# Example: net_config_data is { host is 'localhost', port is 5000 } (if object literal supports this)
+# Or: net_config.set_host('localhost')
+
+fn greet with name, greeting ? 'Hello' # Corrected default value syntax
+    '{greeting}, {name}. Welcome to Coral.'
+
+fn compute_total with price, quantity, tax_rate ? 0.07 # Corrected default value syntax
+    sub_total is price * quantity
+    sub_total + (sub_total * tax_rate) # Implicit return of last expression
+
+greet('Expert') # Corrected function call
+greet('Dr. Coral', 'Salutations') # Corrected function call
+
+order_value is compute_total(100, 3) # Corrected function call
+
+# Assuming function call with named arguments needs 'with' keyword
+order_custom_tax is compute_total with price 100, quantity 3, tax_rate 0.1
+
+status_text is system_status.load_average gt 0.9 ? 'High Load' ! 'Normal Load' # Corrected field access
+
+iterate system_status.active_nodes check_health $
+
+check_health across system_status.active_nodes
+check_health across system_status.active_nodes into node_status
+check_health across system_status.active_nodes with host 'localhost' into node_status
+
+while iterator lt 3
+    log 'iterator is {iterator}'
+
+# EBNF: "until" identifier [ "from" expression ] [ "by" expression ] "is" expression statement_block
+# 'is' separates setup from the condition expression.
+until iterator from 2 by 2 is (iterator equals 8) # Made condition explicit
+    log 'iterator is {iterator}'
+
+unless x equals 0 process(x) # Corrected function call
+process(x) unless x equals 0 # Postfix unless (EBNF valid, grammar.js TODO for postfix)
+
+config is load 'coral.json' # Valid load operation
+# load 'coral.json' as config # This syntax is not in EBNF/grammar. Removed.
+
+record is user with name 'root' # Valid instantiation with 'with'
+
+# Instantiation with '!' and parenthesized arguments
+brandon is user ! ('brandon', 'brandon@email.com', 'password')
+
+object datapoint
+    value
+    processed ? no
+    timestamp ? now
+
+    process
+        processed is yes
+
+d1 is datapoint with value 42
+d2 is datapoint with value 100
+
+d1.process!() # Valid method call with '!'
+d2.process!()
+
+store task_def # Renamed to avoid conflict with earlier 'task' store instance/type
+    description
+    priority ? 1
+    complete ? false
+
+    set_complete # Method
+        id # Parameter 'id', removed problematic default $0
+        # 'update' is a built-in operation
+        update id complete true # Assuming 'id' here refers to a global/contextual var or type to update
+
+    get_summary # Method
+        status is complete ? 'Done' ! 'Pending' # 'complete' is a property of this store
+        'task {id} (P{priority}) - {status}: {description}' # Implicit return
+
+log (hash.blake3 'hello') # Log takes one expression
+
+store message
+    sender
+    recipient
+    subject ? empty
+    body ? empty
+    timestamp ? now
+    acknowledged ? no
+
+    as_string # Method
+        # Implicitly returns the last string expression. Multiple strings are fine if the block structure implies concatenation or list.
+        # For a single string result, they should be concatenated or formatted.
+        # Assuming here they are meant to be separate log lines or part of a multi-line string concept.
+        # For simplicity, returning just the first line as an example of a valid return.
+        'message:{id} from {sender} to {recipient}'
+        # 'at {timestamp} (ack: {acknowledged})' # To return multiple lines, need array or concatenation
+        # 'subject: {subject}'
+        # 'body: {body}'
+
+    as_map # Method
+        # Body should return an object literal
+        return {
+            'id' is id,
+            'sender' is sender.id, # Assuming sender has an id field
+            'recipient' is recipient.id, # Assuming recipient has an id field
+            'subject' is subject,
+            'body' is body,
+            'timestamp' is timestamp,
+            'acknowledged' is acknowledged
+        }
+
+    as_list # Method
+        # Body should return an array literal
+        return [
+            id, sender.id, recipient.id,
+            subject, body, timestamp,
+            acknowledged
+        ]
+
+store actor user_actor # Renamed to avoid conflict
+    name
+    email
+    password # This will be set by 'make' from a parameter
+    &blocklist
+    &messages
+
+    make
+        # 'make' in EBNF/grammar has no parameters. Password should be passed via 'with' at instantiation.
+        # Example: new_user is user_actor with name 'n', email 'e', initial_password 'p'
+        # Then 'make' could access initial_password if it was set as a property.
+        # For now, assuming password is a property set before make, or $password is a global.
+        password is hash.blake3 $password # $password is a parameter_reference
+
+    send # Method
+        # recipient is user with $id # $id is not an identifier for 'with' key
+        # Assuming 'id_val' is the variable holding the ID for the recipient.
+        # And 'user_actor' is the type to instantiate.
+        recipient is user_actor with id id_val # 'id_val' would be an argument to 'send' or a property
+        recipient.receive($message) # Assuming $message is a parameter or property
+
+    authenticate # Method
+        # Assuming 'password_to_check' is a parameter to this method
+        pwd_hash is hash.blake3 password_to_check
+        pwd_hash equals password # 'password' is a property of this actor
+
+    check_blocked # Method
+        # Original: id from user with username $username in blocklist # This is complex query-like
+        # Simplified placeholder:
+        log 'check_blocked called for user: {self.name}' # Assuming 'self' access
+
+    @receive # Message Handler
+        # Original: check_blocked log return # Complex sequence
+        # Simplified:
+        log 'message received by {self.name}'
+        # Example of using a method:
+        # if self.check_blocked() then
+        #    log 'sender is blocked'
+        #    return
+        # end
+        # For now, just a log.
+
+x is 'ok'

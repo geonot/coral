@@ -91,7 +91,7 @@ impl Lexer {
         
         // Collection operations
         keywords.insert("push".to_string(), TokenType::Push);
-        keywords.insert("pop".to_string(), TokenType::Pop);
+        // "pop" is now treated as a regular identifier for method calls like object.pop
         
         keywords
     }

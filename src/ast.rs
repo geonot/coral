@@ -155,20 +155,6 @@ pub enum Expression {
         force_success: bool, // for object!
     },
     
-    // Special Coral constructs
-    AcrossIteration {
-        operation: Box<Expression>,
-        collection: Box<Expression>,
-        with_args: Vec<Expression>,
-        into_var: Option<String>,
-    },
-    
-    IterateStatement {
-        collection: Box<Expression>,
-        operation: Box<Expression>,
-        placeholder: Box<Expression>,
-    },
-    
     // Error handling
     ErrorHandling {
         expression: Box<Expression>,
@@ -210,10 +196,6 @@ pub enum Expression {
     // Operations
     LogOperation {
         message: Box<Expression>,
-    },
-    
-    PushOperation {
-        item: Box<Expression>,
     },
     
     IterateOperation {

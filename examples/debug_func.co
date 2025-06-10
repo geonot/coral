@@ -1,0 +1,6 @@
+fn greet with name
+    'Hello {name}!'
+
+name is 'Coral'
+greeting is greet(name) # Use parentheses for function calls as per current grammar.js
+log greeting

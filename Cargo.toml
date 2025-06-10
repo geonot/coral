@@ -1,0 +1,25 @@
+[package]
+name = "coral"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "coral"
+path = "src/lib.rs"
+
+[[bin]]
+name = "coral-parser"
+path = "src/main.rs"
+
+[[bin]]
+name = "coral-lsp"
+path = "src/lsp_main.rs"
+
+[dependencies]
+tower-lsp = "0.20"
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ropey = "1.6"
+
+[dev-dependencies]

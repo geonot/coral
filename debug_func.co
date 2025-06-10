@@ -1,0 +1,6 @@
+fn greet with name
+    'Hello {name}!'
+
+name is 'Coral'
+greeting is greet name
+log greeting

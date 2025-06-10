@@ -1,0 +1,70 @@
+{
+    "name": "coral-language",
+    "displayName": "Coral Language Support",
+    "description": "Exclusive syntax highlighting for Coral programming language",
+    "version": "0.2.0",
+    "publisher": "coral-lang",
+    "license": "MIT",
+    "engines": {
+        "vscode": "^1.74.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "languages": [
+            {
+                "id": "coral",
+                "aliases": ["Coral", "coral"],
+                "extensions": [".co", ".coral"],
+                "configuration": "./language-configuration.json",
+                "filenames": []
+            }
+        ],
+        "grammars": [
+            {
+                "language": "coral",
+                "scopeName": "source.coral",
+                "path": "./syntaxes/coral.tmLanguage.json"
+            }
+        ],
+        "commands": [
+            {
+                "command": "coral.restart",
+                "title": "Restart Coral LSP"
+            }
+        ],
+        "configuration": {
+            "type": "object",
+            "title": "Coral Language",
+            "properties": {
+                "coral.lsp.enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable Coral Language Server"
+                },
+                "coral.lsp.serverPath": {
+                    "type": "string",
+                    "default": "coral-lsp",
+                    "description": "Path to the Coral LSP executable"
+                }
+            }
+        }
+    },
+    "activationEvents": [
+        "onLanguage:coral"
+    ],
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./"
+    },
+    "dependencies": {
+        "vscode-languageclient": "^8.1.0"
+    },
+    "devDependencies": {
+        "@types/vscode": "^1.74.0",
+        "@types/node": "16.x",
+        "typescript": "^4.9.4"
+    }
+}

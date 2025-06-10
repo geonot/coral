@@ -1,0 +1,191 @@
+(* Coral Programming Language EBNF Grammar - CORAL22 Version *)
+
+program = { statement } ;
+
+statement = use_statement
+          | store_declaration
+          | object_declaration  
+          | function_declaration
+          | assignment
+          | function_call
+          | method_call
+          | control_statement
+          | expression_statement
+          | comment ;
+
+(* Module System *)
+use_statement = "use" module_path { "," module_path } NEWLINE ;
+
+module_path = identifier { "." identifier } ;
+
+(* Store and Object Declarations *)
+store_declaration = "store" [ "actor" ] identifier indented_body ;
+
+object_declaration = "object" identifier indented_body ;
+
+indented_body = NEWLINE INDENT { field_declaration | method_declaration } DEDENT ;
+
+field_declaration = [ "&" | "@" ] identifier [ "?" default_value ] [ doc_comment ] NEWLINE ;
+
+method_declaration = [ "@" ] identifier [ parameter_list ] [ doc_comment ] NEWLINE indented_body ;
+
+(* Function Declarations *)
+function_declaration = "fn" identifier [ parameter_list ] NEWLINE indented_body ;
+
+parameter_list = "with" parameter { "," parameter } ;
+
+parameter = identifier [ default_value ] ;
+
+default_value = literal | identifier | expression ;
+
+(* Assignments *)
+assignment = identifier "is" ( expression | indented_object ) NEWLINE
+           | expression "as" identifier NEWLINE ;
+
+indented_object = NEWLINE INDENT { object_field } DEDENT ;
+
+object_field = identifier "is" expression NEWLINE ;
+
+(* Function and Method Calls *)
+function_call = identifier [ "!" ] [ space_separated_args | named_args_block ] ;
+
+space_separated_args = expression { "," expression } ;
+
+named_args_block = NEWLINE INDENT { named_arg } DEDENT ;
+
+named_arg = identifier expression [ "," ] NEWLINE ;
+
+method_call = expression "." identifier [ "!" ] [ space_separated_args ]
+            | expression "." identifier "(" [ expression_list ] ")"
+            | chained_method_call ;
+
+chained_method_call = method_call ( "then" | "and" ) method_call ;
+
+expression_list = expression { "," expression } ;
+
+(* Control Statements *)
+control_statement = if_statement
+                  | while_statement
+                  | until_statement
+                  | unless_statement
+                  | iterate_statement
+                  | across_statement ;
+
+if_statement = "if" condition NEWLINE indented_body [ "else" NEWLINE indented_body ] ;
+
+while_statement = "while" condition NEWLINE indented_body ;
+
+until_statement = "until" iterator_clause condition NEWLINE indented_body ;
+
+unless_statement = "unless" condition NEWLINE indented_body
+                 | expression "unless" condition ;
+
+iterate_statement = "iterate" expression identifier [ "$" ] ;
+
+across_statement = identifier "across" expression [ "into" identifier ] [ "with" named_args_block ] ;
+
+iterator_clause = identifier "from" expression "by" expression "is" expression ;
+
+condition = expression ;
+
+(* Expressions *)
+expression = ternary_expression ;
+
+ternary_expression = logical_expression [ "?" expression "!" expression ] ;
+
+logical_expression = comparison_expression { logical_operator comparison_expression } ;
+
+comparison_expression = arithmetic_expression { comparison_operator arithmetic_expression } ;
+
+arithmetic_expression = term { arithmetic_operator term } ;
+
+term = factor { multiplicative_operator factor } ;
+
+factor = primary [ accessor ] ;
+
+primary = literal
+        | identifier
+        | parameter_reference
+        | list_literal
+        | string_interpolation
+        | method_call
+        | function_call
+        | "(" expression ")" ;
+
+accessor = "." identifier
+         | "at" expression
+         | "@" expression
+         | "[" expression "]" ;
+
+parameter_reference = "$" identifier
+                    | "$" number ;
+
+list_literal = "[" [ expression_list ] "]" ;
+
+string_interpolation = ( "'" | '"' ) { string_char | "{" expression "}" } ( "'" | '"' ) ;
+
+string_char = ? any character except quote and opening brace ? ;
+
+(* Collection Operations *)
+collection_operation = "push" expression "on" identifier
+                     | identifier "." "push" expression
+                     | identifier "." "pop"
+                     | identifier "." "empty" ;
+
+(* Operators *)
+logical_operator = "and" | "or" ;
+
+comparison_operator = "equals" | "gt" | "lt" | "gte" | "lte" ;
+
+arithmetic_operator = "+" | "-" ;
+
+multiplicative_operator = "*" | "/" | "%" ;
+
+(* Error Handling *)
+expression_statement = expression [ error_handling ] NEWLINE ;
+
+error_handling = "err" ( "return" | "log" "return" | "{" expression "}" | expression ) ;
+
+(* Data Conversion *)
+conversion_declaration = "as" identifier NEWLINE indented_body ;
+
+(* Literals *)
+literal = string_literal
+        | number_literal
+        | boolean_literal
+        | special_literal ;
+
+string_literal = ( "'" { string_char } "'" ) | ( '"' { string_char } '"' ) ;
+
+number_literal = integer | float ;
+
+integer = digit { digit } ;
+
+float = digit { digit } "." digit { digit } ;
+
+boolean_literal = "true" | "false" | "yes" | "no" ;
+
+special_literal = "now" | "empty" ;
+
+(* Comments *)
+comment = single_comment | doc_comment ;
+
+single_comment = "#" { ? any character except newline ? } NEWLINE ;
+
+doc_comment = "##" { ? any character except newline ? } NEWLINE ;
+
+(* Identifiers *)
+identifier = letter { letter | digit | "_" } ;
+
+(* Special Tokens *)
+INDENT = ? indentation increase ? ;
+DEDENT = ? indentation decrease ? ;
+NEWLINE = ? newline character ? ;
+
+(* Basic Elements *)
+letter = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m"
+       | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z"
+       | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M"
+       | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" ;
+
+digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;

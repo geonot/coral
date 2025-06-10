@@ -1,0 +1,5 @@
+fn add with x, y
+    x + y
+
+result is add 5, 3
+log result

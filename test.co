@@ -1,0 +1,17 @@
+# Coral test file
+message is 'hello coral'
+count is 42
+pi is 3.14159
+
+fn greet with name, greeting 'Hello'
+    '{greeting}, {name}!'
+
+object user
+    name
+    email
+    age ? 0
+    
+store task
+    description
+    priority ? 1
+    complete ? no

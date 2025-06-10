@@ -1,0 +1,2 @@
+@receive
+    check_blocked log return

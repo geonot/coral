@@ -1,0 +1,3822 @@
+[[[src/ast.rs]]]
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+// Global node ID counter for unique AST node identification
+static NODE_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// Unique identifier for each AST node
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NodeId(u32);
+
+impl NodeId {
+    pub fn new() -> Self {
+        NodeId(NODE_COUNTER.fetch_add(1, Ordering::SeqCst))
+    }
+    
+    pub fn as_u32(&self) -> u32 {
+        self.0
+    }
+}
+
+/// Source location information for precise error reporting
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceSpan {
+    pub file: String,
+    pub start_line: u32,
+    pub start_col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+}
+
+impl SourceSpan {
+    pub fn new(file: String, start_line: u32, start_col: u32, end_line: u32, end_col: u32) -> Self {
+        Self { file, start_line, start_col, end_line, end_col }
+    }
+    
+    pub fn single_char(file: String, line: u32, col: u32) -> Self {
+        Self::new(file, line, col, line, col + 1)
+    }
+}
+
+/// Comprehensive type system for Coral
+#[derive(Debug, Clone, PartialEq)]
+pub enum Type {
+    // Primitive types
+    I8, I16, I32, I64,
+    F32, F64,
+    Bool,
+    String,
+    
+    // Collection types
+    List(Box<Type>),
+    Map(Box<Type>, Box<Type>),
+    
+    // Function types
+    Function {
+        params: Vec<Type>,
+        return_type: Box<Type>,
+    },
+    
+    // User-defined types
+    Object {
+        name: String,
+        fields: HashMap<String, Type>,
+    },
+    Store {
+        name: String,
+        value_type: Box<Type>,
+    },
+    Actor {
+        name: String,
+        message_types: Vec<Type>,
+    },
+    
+    // Type variables for inference
+    TypeVar(u32),
+    
+    // Result type for error handling
+    Result(Box<Type>, Box<Type>),
+    
+    // Unit type
+    Unit,
+    
+    // Unknown type (for inference)
+    Unknown,
+}
+
+impl Type {
+    pub fn new_type_var() -> Self {
+        static TYPE_VAR_COUNTER: AtomicU32 = AtomicU32::new(0);
+        Type::TypeVar(TYPE_VAR_COUNTER.fetch_add(1, Ordering::SeqCst))
+    }
+    
+    pub fn is_numeric(&self) -> bool {
+        matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::F32 | Type::F64)
+    }
+    
+    pub fn is_integer(&self) -> bool {
+        matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64)
+    }
+    
+    pub fn is_float(&self) -> bool {
+        matches!(self, Type::F32 | Type::F64)
+    }
+    
+    /// Get the size in bytes for primitive types
+    pub fn size_bytes(&self) -> Option<usize> {
+        match self {
+            Type::I8 => Some(1),
+            Type::I16 => Some(2),
+            Type::I32 => Some(4),
+            Type::I64 => Some(8),
+            Type::F32 => Some(4),
+            Type::F64 => Some(8),
+            Type::Bool => Some(1),
+            Type::Unit => Some(0),
+            _ => None,
+        }
+    }
+    
+    /// Get LLVM type string representation
+    pub fn to_llvm_type(&self) -> String {
+        match self {
+            Type::I8 => "i8".to_string(),
+            Type::I16 => "i16".to_string(),
+            Type::I32 => "i32".to_string(),
+            Type::I64 => "i64".to_string(),
+            Type::F32 => "float".to_string(),
+            Type::F64 => "double".to_string(),
+            Type::Bool => "i1".to_string(),
+            Type::String => "i8*".to_string(),
+            Type::Unit => "void".to_string(),
+            Type::List(elem_type) => format!("{}*", elem_type.to_llvm_type()),
+            Type::Function { params, return_type } => {
+                let param_types: Vec<String> = params.iter().map(|t| t.to_llvm_type()).collect();
+                format!("{}({})*", return_type.to_llvm_type(), param_types.join(", "))
+            }
+            _ => "i8*".to_string(), // Default to pointer for complex types
+        }
+    }
+}
+
+/// Binary operators
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BinaryOp {
+    // Arithmetic
+    Add, Sub, Mul, Div, Mod,
+    
+    // Comparison
+    Eq, Ne, Lt, Le, Gt, Ge,
+    
+    // Logical
+    And, Or,
+    
+    // Bitwise
+    BitAnd, BitOr, BitXor, Shl, Shr,
+}
+
+/// Unary operators
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UnaryOp {
+    Not, Neg, BitNot,
+}
+
+/// Literal values including Coral-specific literals
+#[derive(Debug, Clone, PartialEq)]
+pub enum Literal {
+    Integer(i64),
+    Float(f64),
+    String(String),
+    Bool(bool),
+    Unit,
+    // Coral-specific literals
+    No,       // Represents null/nil/none
+    Empty,    // Represents empty collection
+    Now,      // Represents current timestamp
+}
+
+/// Parts of an interpolated string
+#[derive(Debug, Clone, PartialEq)]
+pub enum StringPart {
+    Literal(String),    // Static text like "hello "
+    Expression(Expr),   // Embedded expression like {name}
+}
+
+/// Expressions with full AST node information
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expr {
+    pub id: NodeId,
+    pub span: SourceSpan,
+    pub type_: Type,
+    pub kind: ExprKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprKind {
+    Literal(Literal),
+    Identifier(String),
+    Binary {
+        op: BinaryOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Unary {
+        op: UnaryOp,
+        operand: Box<Expr>,
+    },
+    Call {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    Index {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
+    FieldAccess {
+        object: Box<Expr>,
+        field: String,
+    },
+    ListLiteral(Vec<Expr>),
+    MapLiteral(Vec<(Expr, Expr)>),
+    StringInterpolation {
+        // For 'hello {name}' -> parts: ["hello ", name_expr, ""]
+        parts: Vec<StringPart>,
+    },
+    If {
+        condition: Box<Expr>,
+        then_branch: Box<Expr>,
+        else_branch: Option<Box<Expr>>,
+    },
+    Block(Vec<Stmt>),
+    Lambda {
+        params: Vec<Parameter>,
+        body: Box<Expr>,
+    },
+}
+
+impl Expr {
+    pub fn new(span: SourceSpan, kind: ExprKind) -> Self {
+        Self {
+            id: NodeId::new(),
+            span,
+            type_: Type::Unknown,
+            kind,
+        }
+    }
+    
+    pub fn with_type(mut self, type_: Type) -> Self {
+        self.type_ = type_;
+        self
+    }
+}
+
+/// Statements with full AST node information
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stmt {
+    pub id: NodeId,
+    pub span: SourceSpan,
+    pub kind: StmtKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StmtKind {
+    Expression(Expr),
+    Assignment {
+        target: Expr,
+        value: Expr,
+    },
+    If {
+        condition: Expr,
+        then_branch: Vec<Stmt>,
+        else_branch: Option<Vec<Stmt>>,
+    },
+    Unless {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
+    While {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
+    Until {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
+    For {
+        variable: String,
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
+    Iterate {
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
+    Return(Option<Expr>),
+    Break,
+    Continue,
+    Function {
+        name: String,
+        params: Vec<Parameter>,
+        return_type: Option<Type>,
+        body: Vec<Stmt>,
+    },
+    Object {
+        name: String,
+        fields: Vec<Field>,
+        methods: Vec<ObjectMethod>,  // Methods within the object
+    },
+    Store {
+        name: String,
+        value_type: Type,
+        initial_value: Option<Expr>,
+    },
+    Actor {
+        name: String,
+        handlers: Vec<MessageHandler>,
+    },
+    Import {
+        module: String,
+        items: Option<Vec<String>>,
+    },
+}
+
+impl Stmt {
+    pub fn new(span: SourceSpan, kind: StmtKind) -> Self {
+        Self {
+            id: NodeId::new(),
+            span,
+            kind,
+        }
+    }
+}
+
+/// Function parameter with optional default value
+#[derive(Debug, Clone, PartialEq)]
+pub struct Parameter {
+    pub name: String,
+    pub type_: Type,
+    pub default_value: Option<Expr>,  // For default parameters: fn greet(name, greeting 'hello')
+    pub span: SourceSpan,
+}
+
+/// Object field definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct Field {
+    pub name: String,
+    pub type_: Type,
+    pub default_value: Option<Expr>,
+    pub span: SourceSpan,
+}
+
+/// Object method definition (methods within objects)
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectMethod {
+    pub name: String,
+    pub params: Vec<Parameter>,
+    pub return_type: Option<Type>,
+    pub body: Vec<Stmt>,
+    pub span: SourceSpan,
+}
+
+/// Actor message handler
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageHandler {
+    pub message_type: Type,
+    pub body: Vec<Stmt>,
+    pub span: SourceSpan,
+}
+
+/// Top-level program
+#[derive(Debug, Clone, PartialEq)]
+pub struct Program {
+    pub statements: Vec<Stmt>,
+    pub span: SourceSpan,
+}
+
+/// AST visitor trait for traversals
+pub trait Visitor<T> {
+    fn visit_program(&mut self, program: &Program) -> T;
+    fn visit_stmt(&mut self, stmt: &Stmt) -> T;
+    fn visit_expr(&mut self, expr: &Expr) -> T;
+    fn visit_type(&mut self, type_: &Type) -> T;
+}
+
+/// Mutable AST visitor trait for transformations
+pub trait VisitorMut {
+    fn visit_program_mut(&mut self, program: &mut Program);
+    fn visit_stmt_mut(&mut self, stmt: &mut Stmt);
+    fn visit_expr_mut(&mut self, expr: &mut Expr);
+    fn visit_type_mut(&mut self, type_: &mut Type);
+}
+
+/// Utility functions for AST construction
+impl ExprKind {
+    pub fn literal(lit: Literal) -> Self {
+        ExprKind::Literal(lit)
+    }
+    
+    pub fn identifier(name: impl Into<String>) -> Self {
+        ExprKind::Identifier(name.into())
+    }
+    
+    pub fn binary(op: BinaryOp, left: Expr, right: Expr) -> Self {
+        ExprKind::Binary {
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+    
+    pub fn call(callee: Expr, args: Vec<Expr>) -> Self {
+        ExprKind::Call {
+            callee: Box::new(callee),
+            args,
+        }
+    }
+}
+
+impl StmtKind {
+    pub fn function(name: impl Into<String>, params: Vec<Parameter>, body: Vec<Stmt>) -> Self {
+        StmtKind::Function {
+            name: name.into(),
+            params,
+            return_type: None,
+            body,
+        }
+    }
+}
+
+/// Helper for creating source spans during testing
+impl Default for SourceSpan {
+    fn default() -> Self {
+        SourceSpan::new("test".to_string(), 1, 1, 1, 1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_node_id_uniqueness() {
+        let id1 = NodeId::new();
+        let id2 = NodeId::new();
+        assert_ne!(id1, id2);
+    }
+    
+    #[test]
+    fn test_type_predicates() {
+        assert!(Type::I32.is_numeric());
+        assert!(Type::I32.is_integer());
+        assert!(!Type::I32.is_float());
+        
+        assert!(Type::F64.is_numeric());
+        assert!(!Type::F64.is_integer());
+        assert!(Type::F64.is_float());
+        
+        assert!(!Type::Bool.is_numeric());
+    }
+    
+    #[test]
+    fn test_expr_construction() {
+        let span = SourceSpan::default();
+        let expr = Expr::new(span.clone(), ExprKind::literal(Literal::Integer(42)));
+        
+        assert_eq!(expr.span, span);
+        assert_eq!(expr.type_, Type::Unknown);
+        assert!(matches!(expr.kind, ExprKind::Literal(Literal::Integer(42))));
+    }
+    
+    #[test]
+    fn test_binary_expr_construction() {
+        let span = SourceSpan::default();
+        let left = Expr::new(span.clone(), ExprKind::literal(Literal::Integer(1)));
+        let right = Expr::new(span.clone(), ExprKind::literal(Literal::Integer(2)));
+        
+        let binary = Expr::new(span.clone(), ExprKind::binary(BinaryOp::Add, left, right));
+        
+        if let ExprKind::Binary { op, .. } = &binary.kind {
+            assert_eq!(*op, BinaryOp::Add);
+        } else {
+            panic!("Expected binary expression");
+        }
+    }
+}
+
+[[[src/lexer.rs]]]
+use std::collections::HashMap;
+use std::fmt;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TokenType {
+    // Literals
+    Integer,
+    Float,
+    String,
+    InterpolatedString,  // Single-quoted strings that may contain interpolation
+    True,
+    False,
+    Identifier,
+    
+    // Keywords
+    Let,
+    Fn,
+    Is,            // Primary assignment operator in Coral
+    Object,
+    Store,
+    Actor,
+    Use,
+    Mod,
+    If,
+    Else,
+    While,
+    For,
+    In,
+    Until,
+    Unless,
+    Iterate,
+    Across,
+    Return,
+    Break,
+    Continue,
+    Import,
+    Err,
+    No,
+    Yes,
+    Empty,
+    Now,
+    Plus,          // +
+    Minus,         // -
+    Star,          // *
+    Slash,         // /
+    Percent,       // %
+    Equal,         // =
+    EqualEqual,    // ==
+    BangEqual,     // !=
+    Less,          // <
+    LessEqual,     // <=
+    Greater,       // >
+    GreaterEqual,  // >=
+    And,           // and
+    Or,            // or
+    LogicalAnd,    // &&
+    LogicalOr,     // ||
+    Bang,          // !
+    Question,      // ?
+    Dot,           // .
+    Comma,         // ,
+    Colon,         // :
+    Semicolon,     // ;
+    Arrow,         // ->
+    At,            // @
+    Ampersand,     // &
+    Dollar,        // $
+    Pipe,          // |
+    Caret,         // ^
+    Tilde,         // ~
+    LeftShift,     // <<
+    RightShift,    // >>
+    LeftParen,     // (
+    RightParen,    // )
+    LeftBrace,     // {
+    RightBrace,    // }
+    LeftBracket,   // [
+    RightBracket,  // ]
+    
+    // Special
+    Newline,
+    Indent,
+    Dedent,
+    Error,     // For unknown characters
+    Eof,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Token {
+    pub token_type: TokenType,
+    pub lexeme: String,
+    pub line: usize,
+    pub column: usize,
+}
+
+impl Token {
+    pub fn new(token_type: TokenType, line: usize, column: usize, lexeme: String) -> Self {
+        Self {
+            token_type,
+            lexeme,
+            line,
+            column,
+        }
+    }
+}
+
+pub struct Lexer {
+    input: Vec<char>,
+    position: usize,
+    current_char: Option<char>,
+    line: usize,
+    column: usize,
+    keywords: HashMap<String, TokenType>,
+    indent_stack: Vec<usize>,
+    token_buffer: Vec<Token>,
+    at_line_start: bool,
+}
+
+impl Lexer {
+    pub fn new(input: String, _file_name: String) -> Self {
+        let chars: Vec<char> = input.chars().collect();
+        let current_char = chars.get(0).copied();
+        
+        let mut keywords = HashMap::new();
+        keywords.insert("let".to_string(), TokenType::Let);
+        keywords.insert("fn".to_string(), TokenType::Fn);
+        keywords.insert("is".to_string(), TokenType::Is);
+        keywords.insert("object".to_string(), TokenType::Object);
+        keywords.insert("store".to_string(), TokenType::Store);
+        keywords.insert("actor".to_string(), TokenType::Actor);
+        keywords.insert("use".to_string(), TokenType::Use);
+        keywords.insert("mod".to_string(), TokenType::Mod);
+        keywords.insert("if".to_string(), TokenType::If);
+        keywords.insert("else".to_string(), TokenType::Else);
+        keywords.insert("while".to_string(), TokenType::While);
+        keywords.insert("for".to_string(), TokenType::For);
+        keywords.insert("in".to_string(), TokenType::In);
+        keywords.insert("until".to_string(), TokenType::Until);
+        keywords.insert("unless".to_string(), TokenType::Unless);
+        keywords.insert("iterate".to_string(), TokenType::Iterate);
+        keywords.insert("across".to_string(), TokenType::Across);
+        keywords.insert("return".to_string(), TokenType::Return);
+        keywords.insert("break".to_string(), TokenType::Break);
+        keywords.insert("continue".to_string(), TokenType::Continue);
+        keywords.insert("import".to_string(), TokenType::Import);
+        keywords.insert("err".to_string(), TokenType::Err);
+        keywords.insert("no".to_string(), TokenType::No);
+        keywords.insert("yes".to_string(), TokenType::Yes);
+        keywords.insert("empty".to_string(), TokenType::Empty);
+        keywords.insert("now".to_string(), TokenType::Now);
+        keywords.insert("true".to_string(), TokenType::True);
+        keywords.insert("false".to_string(), TokenType::False);
+        keywords.insert("and".to_string(), TokenType::And);
+        keywords.insert("or".to_string(), TokenType::Or);
+        
+        Self {
+            input: chars,
+            position: 0,
+            current_char,
+            line: 1,
+            column: 1,
+            keywords,
+            indent_stack: vec![0],
+            token_buffer: Vec::new(),
+            at_line_start: true,
+        }
+    }
+    
+    fn advance(&mut self) {
+        if self.current_char == Some('\n') {
+            self.line += 1;
+            self.column = 1;
+        } else {
+            self.column += 1;
+        }
+        
+        self.position += 1;
+        self.current_char = self.input.get(self.position).copied();
+    }
+    
+    fn peek(&self) -> Option<char> {
+        self.input.get(self.position + 1).copied()
+    }
+    
+    fn skip_whitespace(&mut self) {
+        while let Some(ch) = self.current_char {
+            if ch == ' ' || ch == '\t' || ch == '\r' {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+    }
+    
+    fn read_string(&mut self, quote_char: char) -> String {
+        let mut value = String::new();
+        self.advance(); // Skip opening quote
+        
+        while let Some(ch) = self.current_char {
+            if ch == quote_char {
+                self.advance(); // Skip closing quote
+                break;
+            } else if ch == '\\' {
+                self.advance();
+                match self.current_char {
+                    Some('n') => value.push('\n'),
+                    Some('t') => value.push('\t'),
+                    Some('r') => value.push('\r'),
+                    Some('\\') => value.push('\\'),
+                    Some('"') => value.push('"'),
+                    Some('\'') => value.push('\''),
+                    Some(c) => {
+                        value.push('\\');
+                        value.push(c);
+                    }
+                    None => value.push('\\'),
+                }
+            } else {
+                value.push(ch);
+            }
+            self.advance();
+        }
+        
+        value
+    }
+    
+    fn read_number(&mut self) -> (TokenType, String) {
+        let mut value = String::new();
+        let mut is_float = false;
+        
+        while let Some(ch) = self.current_char {
+            if ch.is_ascii_digit() {
+                value.push(ch);
+                self.advance();
+            } else if ch == '.' && !is_float {
+                if let Some(next) = self.peek() {
+                    if next.is_ascii_digit() {
+                        is_float = true;
+                        value.push(ch);
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        
+        if is_float {
+            (TokenType::Float, value)
+        } else {
+            (TokenType::Integer, value)
+        }
+    }
+    
+    fn read_hex_number(&mut self) -> (TokenType, String) {
+        let mut value = String::new();
+        self.advance(); // Skip '0'
+        self.advance(); // Skip 'x'
+        
+        while let Some(ch) = self.current_char {
+            if ch.is_ascii_hexdigit() {
+                value.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        (TokenType::Integer, format!("0x{}", value))
+    }
+    
+    fn read_binary_number(&mut self) -> (TokenType, String) {
+        let mut value = String::new();
+        self.advance(); // Skip 'b'
+        
+        while let Some(ch) = self.current_char {
+            if ch == '0' || ch == '1' {
+                value.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        (TokenType::Integer, format!("b{}", value))
+    }
+    
+    fn read_identifier(&mut self) -> String {
+        let mut value = String::new();
+        
+        while let Some(ch) = self.current_char {
+            if ch.is_alphanumeric() || ch == '_' {
+                value.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        value
+    }
+    
+    fn handle_indentation(&mut self) -> Vec<Token> {
+        let mut tokens = Vec::new();
+        let mut indent_level = 0;
+        
+        // Count indentation
+        while let Some(ch) = self.current_char {
+            if ch == ' ' {
+                indent_level += 1;
+                self.advance();
+            } else if ch == '\t' {
+                indent_level += 4; // Treat tab as 4 spaces
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        
+        let current_indent = *self.indent_stack.last().unwrap();
+        
+        if indent_level > current_indent {
+            // Increased indentation
+            self.indent_stack.push(indent_level);
+            tokens.push(Token::new(
+                TokenType::Indent,
+                self.line,
+                self.column,
+                " ".repeat(indent_level),
+            ));
+        } else if indent_level < current_indent {
+            // Decreased indentation
+            while let Some(&stack_indent) = self.indent_stack.last() {
+                if stack_indent <= indent_level {
+                    break;
+                }
+                self.indent_stack.pop();
+                tokens.push(Token::new(
+                    TokenType::Dedent,
+                    self.line,
+                    self.column,
+                    "".to_string(),
+                ));
+            }
+        }
+        
+        tokens
+    }
+    
+    /// Pop a token from the buffer if available
+    fn pop_buffered_token(&mut self) -> Option<Token> {
+        if self.token_buffer.is_empty() {
+            None
+        } else {
+            Some(self.token_buffer.remove(0))
+        }
+    }
+    
+    /// Process indentation at the start of a line
+    fn process_line_indentation(&mut self) {
+        let indent_tokens = self.handle_indentation();
+        if !indent_tokens.is_empty() {
+            self.token_buffer.extend(indent_tokens);
+        }
+        self.at_line_start = false;
+    }
+    
+    /// Generate dedent tokens at EOF for all remaining indentation levels
+    fn generate_eof_dedents(&mut self) -> Option<Token> {
+        if self.indent_stack.len() > 1 {
+            self.indent_stack.pop();
+            Some(Token::new(TokenType::Dedent, self.line, self.column, "".to_string()))
+        } else {
+            None
+        }
+    }
+    
+    pub fn next_token(&mut self) -> Token {
+        // Return buffered tokens first (from indentation handling)
+        if let Some(token) = self.pop_buffered_token() {
+            return token;
+        }
+        
+        loop {
+            // Handle indentation at the start of a line
+            if self.at_line_start && self.current_char.is_some() {
+                self.process_line_indentation();
+                if let Some(token) = self.pop_buffered_token() {
+                    return token;
+                }
+            }
+            
+            match self.current_char {
+                None => {
+                    // At EOF, generate dedent tokens for all remaining indentation levels
+                    if let Some(dedent_token) = self.generate_eof_dedents() {
+                        return dedent_token;
+                    }
+                    return Token::new(TokenType::Eof, self.line, self.column, "".to_string());
+                }
+                
+                Some('\n') => {
+                    let token = Token::new(TokenType::Newline, self.line, self.column, "\n".to_string());
+                    self.advance();
+                    self.at_line_start = true;
+                    return token;
+                }
+                
+                Some(' ') | Some('\t') | Some('\r') => {
+                    self.skip_whitespace();
+                    continue;
+                }
+                
+                Some('\'') => {
+                    let value = self.read_string('\'');
+                    return Token::new(TokenType::InterpolatedString, self.line, self.column, value);
+                }
+                
+                Some('"') => {
+                    let value = self.read_string('"');
+                    // Check if it contains interpolation patterns
+                    if value.contains('{') && value.contains('}') {
+                        return Token::new(TokenType::InterpolatedString, self.line, self.column, value);
+                    } else {
+                        return Token::new(TokenType::String, self.line, self.column, value);
+                    }
+                }
+                
+                Some('0') if self.peek() == Some('x') => {
+                    let (token_type, lexeme) = self.read_hex_number();
+                    return Token::new(token_type, self.line, self.column, lexeme);
+                }
+                
+                Some('b') if self.peek().map_or(false, |c| c == '0' || c == '1') => {
+                    let (token_type, lexeme) = self.read_binary_number();
+                    return Token::new(token_type, self.line, self.column, lexeme);
+                }
+                
+                Some(ch) if ch.is_ascii_digit() => {
+                    let (token_type, lexeme) = self.read_number();
+                    return Token::new(token_type, self.line, self.column, lexeme);
+                }
+                
+                Some(ch) if ch.is_alphabetic() || ch == '_' => {
+                    let identifier = self.read_identifier();
+                    let token_type = self.keywords.get(&identifier)
+                        .cloned()
+                        .unwrap_or(TokenType::Identifier);
+                    return Token::new(token_type, self.line, self.column, identifier);
+                }
+                
+                Some('?') => {
+                    self.advance();
+                    return Token::new(TokenType::Question, self.line, self.column, "?".to_string());
+                }
+                
+                Some('!') => {
+                    if self.peek() == Some('=') {
+                        self.advance(); // consume '!'
+                        self.advance(); // consume '='
+                        return Token::new(TokenType::BangEqual, self.line, self.column, "!=".to_string());
+                    } else {
+                        self.advance();
+                        return Token::new(TokenType::Bang, self.line, self.column, "!".to_string());
+                    }
+                }
+                
+                Some('=') => {
+                    if self.peek() == Some('=') {
+                        self.advance(); // consume '='
+                        self.advance(); // consume '='
+                        return Token::new(TokenType::EqualEqual, self.line, self.column, "==".to_string());
+                    } else {
+                        self.advance();
+                        return Token::new(TokenType::Equal, self.line, self.column, "=".to_string());
+                    }
+                }
+                
+                Some('<') => {
+                    if self.peek() == Some('=') {
+                        self.advance(); // consume '<'
+                        self.advance(); // consume '='
+                        return Token::new(TokenType::LessEqual, self.line, self.column, "<=".to_string());
+                    } else if self.peek() == Some('<') {
+                        self.advance(); // consume '<'
+                        self.advance(); // consume '<'
+                        return Token::new(TokenType::LeftShift, self.line, self.column, "<<".to_string());
+                    } else {
+                        self.advance();
+                        return Token::new(TokenType::Less, self.line, self.column, "<".to_string());
+                    }
+                }
+                
+                Some('>') => {
+                    if self.peek() == Some('=') {
+                        self.advance(); // consume '>'
+                        self.advance(); // consume '='
+                        return Token::new(TokenType::GreaterEqual, self.line, self.column, ">=".to_string());
+                    } else if self.peek() == Some('>') {
+                        self.advance(); // consume '>'
+                        self.advance(); // consume '>'
+                        return Token::new(TokenType::RightShift, self.line, self.column, ">>".to_string());
+                    } else {
+                        self.advance();
+                        return Token::new(TokenType::Greater, self.line, self.column, ">".to_string());
+                    }
+                }
+                
+                Some('-') => {
+                    if self.peek() == Some('>') {
+                        self.advance(); // consume '-'
+                        self.advance(); // consume '>'
+                        return Token::new(TokenType::Arrow, self.line, self.column, "->".to_string());
+                    } else {
+                        self.advance();
+                        return Token::new(TokenType::Minus, self.line, self.column, "-".to_string());
+                    }
+                }
+                
+                Some('.') => {
+                    self.advance();
+                    return Token::new(TokenType::Dot, self.line, self.column, ".".to_string());
+                }
+                
+                Some(',') => {
+                    self.advance();
+                    return Token::new(TokenType::Comma, self.line, self.column, ",".to_string());
+                }
+                
+                Some(':') => {
+                    self.advance();
+                    return Token::new(TokenType::Colon, self.line, self.column, ":".to_string());
+                }
+                
+                Some(';') => {
+                    self.advance();
+                    return Token::new(TokenType::Semicolon, self.line, self.column, ";".to_string());
+                }
+                
+                Some('@') => {
+                    self.advance();
+                    return Token::new(TokenType::At, self.line, self.column, "@".to_string());
+                }
+                
+                Some('&') => {
+                    self.advance();
+                    if self.current_char == Some('&') {
+                        self.advance();
+                        return Token::new(TokenType::LogicalAnd, self.line, self.column, "&&".to_string());
+                    }
+                    return Token::new(TokenType::Ampersand, self.line, self.column, "&".to_string());
+                }
+                
+                Some('|') => {
+                    self.advance();
+                    if self.current_char == Some('|') {
+                        self.advance();
+                        return Token::new(TokenType::LogicalOr, self.line, self.column, "||".to_string());
+                    }
+                    return Token::new(TokenType::Pipe, self.line, self.column, "|".to_string());
+                }
+                
+                Some('^') => {
+                    self.advance();
+                    return Token::new(TokenType::Caret, self.line, self.column, "^".to_string());
+                }
+                
+                Some('~') => {
+                    self.advance();
+                    return Token::new(TokenType::Tilde, self.line, self.column, "~".to_string());
+                }
+                
+                Some('$') => {
+                    self.advance();
+                    return Token::new(TokenType::Dollar, self.line, self.column, "$".to_string());
+                }
+                
+                Some('+') => {
+                    self.advance();
+                    return Token::new(TokenType::Plus, self.line, self.column, "+".to_string());
+                }
+                
+                Some('*') => {
+                    self.advance();
+                    return Token::new(TokenType::Star, self.line, self.column, "*".to_string());
+                }
+                
+                Some('/') => {
+                    self.advance();
+                    return Token::new(TokenType::Slash, self.line, self.column, "/".to_string());
+                }
+                
+                Some('%') => {
+                    self.advance();
+                    return Token::new(TokenType::Percent, self.line, self.column, "%".to_string());
+                }
+                
+                Some('(') => {
+                    self.advance();
+                    return Token::new(TokenType::LeftParen, self.line, self.column, "(".to_string());
+                }
+                
+                Some(')') => {
+                    self.advance();
+                    return Token::new(TokenType::RightParen, self.line, self.column, ")".to_string());
+                }
+                
+                Some('{') => {
+                    self.advance();
+                    return Token::new(TokenType::LeftBrace, self.line, self.column, "{".to_string());
+                }
+                
+                Some('}') => {
+                    self.advance();
+                    return Token::new(TokenType::RightBrace, self.line, self.column, "}".to_string());
+                }
+                
+                Some('[') => {
+                    self.advance();
+                    return Token::new(TokenType::LeftBracket, self.line, self.column, "[".to_string());
+                }
+                
+                Some(']') => {
+                    self.advance();
+                    return Token::new(TokenType::RightBracket, self.line, self.column, "]".to_string());
+                }
+                
+                Some(ch) => {
+                    // Return error token for unknown characters instead of skipping
+                    let error_ch = ch.to_string();
+                    self.advance();
+                    return Token::new(TokenType::Error, self.line, self.column, error_ch);
+                }
+            }
+        }
+    }
+    
+    pub fn tokenize(&mut self) -> Result<Vec<Token>, String> {
+        let mut tokens = Vec::new();
+        
+        loop {
+            let token = self.next_token();
+            let is_eof = matches!(token.token_type, TokenType::Eof);
+            tokens.push(token);
+            
+            if is_eof {
+                break;
+            }
+        }
+        
+        Ok(tokens)
+    }
+
+}
+
+impl fmt::Display for TokenType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenType::Integer => write!(f, "Integer"),
+            TokenType::Float => write!(f, "Float"),
+            TokenType::String => write!(f, "String"),
+            TokenType::InterpolatedString => write!(f, "InterpolatedString"),
+            TokenType::True => write!(f, "True"),
+            TokenType::False => write!(f, "False"),
+            TokenType::Identifier => write!(f, "Identifier"),
+            TokenType::Let => write!(f, "Let"),
+            TokenType::Fn => write!(f, "Fn"),
+            TokenType::Is => write!(f, "Is"),
+            TokenType::Object => write!(f, "Object"),
+            TokenType::Store => write!(f, "Store"),
+            TokenType::Actor => write!(f, "Actor"),
+            TokenType::Use => write!(f, "Use"),
+            TokenType::Mod => write!(f, "Mod"),
+            TokenType::If => write!(f, "If"),
+            TokenType::Else => write!(f, "Else"),
+            TokenType::While => write!(f, "While"),
+            TokenType::For => write!(f, "For"),
+            TokenType::In => write!(f, "In"),
+            TokenType::Until => write!(f, "Until"),
+            TokenType::Unless => write!(f, "Unless"),
+            TokenType::Iterate => write!(f, "Iterate"),
+            TokenType::Across => write!(f, "Across"),
+            TokenType::Return => write!(f, "Return"),
+            TokenType::Break => write!(f, "Break"),
+            TokenType::Continue => write!(f, "Continue"),
+            TokenType::Import => write!(f, "Import"),
+            TokenType::Err => write!(f, "Err"),
+            TokenType::No => write!(f, "No"),
+            TokenType::Yes => write!(f, "Yes"),
+            TokenType::Empty => write!(f, "Empty"),
+            TokenType::Now => write!(f, "Now"),
+            TokenType::Plus => write!(f, "+"),
+            TokenType::Minus => write!(f, "-"),
+            TokenType::Star => write!(f, "*"),
+            TokenType::Slash => write!(f, "/"),
+            TokenType::Percent => write!(f, "%"),
+            TokenType::Equal => write!(f, "="),
+            TokenType::EqualEqual => write!(f, "=="),
+            TokenType::BangEqual => write!(f, "!="),
+            TokenType::Less => write!(f, "<"),
+            TokenType::LessEqual => write!(f, "<="),
+            TokenType::Greater => write!(f, ">"),
+            TokenType::GreaterEqual => write!(f, ">="),
+            TokenType::And => write!(f, "and"),
+            TokenType::Or => write!(f, "or"),
+            TokenType::LogicalAnd => write!(f, "&&"),
+            TokenType::LogicalOr => write!(f, "||"),
+            TokenType::Bang => write!(f, "!"),
+            TokenType::Question => write!(f, "?"),
+            TokenType::Dot => write!(f, "."),
+            TokenType::Comma => write!(f, ","),
+            TokenType::Colon => write!(f, ":"),
+            TokenType::Semicolon => write!(f, ";"),
+            TokenType::Arrow => write!(f, "->"),
+            TokenType::At => write!(f, "@"),
+            TokenType::Ampersand => write!(f, "&"),
+            TokenType::Dollar => write!(f, "$"),
+            TokenType::Pipe => write!(f, "|"),
+            TokenType::Caret => write!(f, "^"),
+            TokenType::Tilde => write!(f, "~"),
+            TokenType::LeftShift => write!(f, "<<"),
+            TokenType::RightShift => write!(f, ">>"),
+            TokenType::LeftParen => write!(f, "("),
+            TokenType::RightParen => write!(f, ")"),
+            TokenType::LeftBrace => write!(f, "{{"),
+            TokenType::RightBrace => write!(f, "}}"),
+            TokenType::LeftBracket => write!(f, "["),
+            TokenType::RightBracket => write!(f, "]"),
+            TokenType::Newline => write!(f, "Newline"),
+            TokenType::Indent => write!(f, "Indent"),
+            TokenType::Dedent => write!(f, "Dedent"),
+            TokenType::Error => write!(f, "Error"),
+            TokenType::Eof => write!(f, "EOF"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_basic_tokens() {
+        let mut lexer = Lexer::new("let x = 42".to_string(), "test.cor".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        
+        assert_eq!(tokens[0].token_type, TokenType::Let);
+        assert_eq!(tokens[1].token_type, TokenType::Identifier);
+        assert_eq!(tokens[1].lexeme, "x");
+        assert_eq!(tokens[2].token_type, TokenType::Equal);
+        assert_eq!(tokens[3].token_type, TokenType::Integer);
+        assert_eq!(tokens[3].lexeme, "42");
+    }
+    
+    #[test]
+    fn test_numbers() {
+        let mut lexer = Lexer::new("42 3.14 0xFF".to_string(), "test.cor".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        
+        assert_eq!(tokens[0].token_type, TokenType::Integer);
+        assert_eq!(tokens[0].lexeme, "42");
+        assert_eq!(tokens[1].token_type, TokenType::Float);
+        assert_eq!(tokens[1].lexeme, "3.14");
+        assert_eq!(tokens[2].token_type, TokenType::Integer);
+        assert_eq!(tokens[2].lexeme, "0xFF");
+    }
+    
+    #[test]
+    fn test_operators() {
+        let mut lexer = Lexer::new("== != <= >= -> <<".to_string(), "test.cor".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        
+        assert_eq!(tokens[0].token_type, TokenType::EqualEqual);
+        assert_eq!(tokens[1].token_type, TokenType::BangEqual);
+        assert_eq!(tokens[2].token_type, TokenType::LessEqual);
+        assert_eq!(tokens[3].token_type, TokenType::GreaterEqual);
+        assert_eq!(tokens[4].token_type, TokenType::Arrow);
+        assert_eq!(tokens[5].token_type, TokenType::LeftShift);
+    }
+}
+
+[[[src/lib.rs]]]
+pub mod ast;
+pub mod lexer;
+pub mod parser;
+pub mod semantic;
+
+pub use ast::*;
+pub use lexer::*;
+pub use parser::*;
+pub use semantic::*;
+
+[[[src/main.rs]]]
+use coral::*;
+use std::env;
+use std::fs;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    
+    if args.len() > 1 {
+        // Parse a specific file
+        let filename = &args[1];
+        println!("=== Parsing {} ===\n", filename);
+        
+        let content = fs::read_to_string(filename)
+            .map_err(|e| format!("Failed to read file {}: {}", filename, e))?;
+        
+        match parse_and_analyze(&content) {
+            Ok((program, analysis_result)) => {
+                println!("✅ Successfully parsed {} statements", program.statements.len());
+                
+                for (i, stmt) in program.statements.iter().enumerate() {
+                    println!("  {}. {:?}", i + 1, stmt.kind);
+                }
+                
+                match analysis_result {
+                    Ok(()) => println!("\n✅ Semantic analysis passed"),
+                    Err(errors) => {
+                        println!("\n⚠️ Semantic analysis found {} errors:", errors.len());
+                        for error in errors {
+                            println!("   - {}", error.message);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ Failed to parse: {}", e);
+            }
+        }
+        
+        return Ok(());
+    }
+    
+    // Default: run built-in tests
+    println!("=== Enhanced Coral Language Parser with Semantic Analysis ===\n");
+    
+    // Test cases including multi-line code and Coral-specific syntax
+    let test_cases = vec![
+        ("Simple variable", "let x = 42"),
+        ("Coral assignment with 'is'", "message is 'hello coral'"),
+        ("Special literal 'no'", "flag is no"),
+        ("Special literal 'yes'", "flag is yes"),
+        ("Special literal 'empty'", "collection is empty"),
+        ("Special literal 'now'", "timestamp is now"),
+        ("Arithmetic", "let y = 1 + 2 * 3"),
+        ("Function call", "let result = add(10, 20)"),
+        ("Logical operators", "let cmp = true && false || true"),
+        ("Boolean literal", "let flag = true"),
+        ("String literal", "let name = \"hello\""),
+        ("Nested arithmetic", "let complex = (1 + 2) * (3 + 4)"),
+        
+        // New feature tests - unless/until statements
+        ("Unless statement", r#"
+            unless flag:
+                log 'flag is false'
+        "#),
+        ("Until loop", r#"
+            let counter = 0
+            until counter == 5:
+                counter = counter + 1
+        "#),
+        
+        // New feature tests - iterate with $ symbol
+        ("Iterate with $ symbol", r#"
+            let items = [1, 2, 3]
+            iterate items:
+                log $
+        "#),
+        ("Iterate string with $ symbol", r#"
+            let text = "hello"
+            iterate text:
+                let char_value = $
+        "#),
+        
+        // New feature tests - ternary operator
+        ("Ternary operator", "let result = true ? 42 ! 0"),
+        ("Nested ternary", "let complex = x > 0 ? y > 0 ? 1 ! -1 ! 0"),
+        
+        // New feature tests - () list/map literals
+        ("Empty list with ()", "let empty_list = ()"),
+        ("List literal with ()", "let numbers = (1, 2, 3, 4)"),
+        ("Map literal with ()", "let config = (name: 'coral', version: 1)"),
+        ("Mixed types in list", "let mixed = (42, 'hello', true)"),
+        
+        // New feature tests - $ identifier in expressions
+        ("$ in ternary inside iterate", r#"
+            let items = [1, 2, 3]
+            iterate items:
+                let processed = $ > 2 ? $ * 2 ! $ + 1
+        "#),
+        
+        // New feature tests - hex and binary integers
+        ("Hex integer literal", "let hex_value = 0xFF"),
+        ("Binary integer literal", "let bin_value = b1010"),
+        ("Hex in expression", "let result = 0x10 + 0x20"),
+        
+        // Existing tests
+        ("Multi-line simple", r#"
+            let a = 10
+            let b = 20
+        "#),
+        ("Multi-line with function", r#"
+            fn add(x: i32, y: i32) -> i32:
+                return x + y
+            let result = add(5, 3)
+        "#),
+        ("Function with default parameter", r#"
+            fn greet(name, greeting 'hello') -> string:
+                return greeting
+        "#),
+        ("Object with fields and methods", r#"
+            object task:
+                definition: string
+                processed ? no
+                
+                complete:
+                    processed is yes
+        "#),
+        ("If expression", r#"
+            let value = if true:
+                42
+            else:
+                0
+        "#),
+        ("Block expression with function", r#"
+            fn get_complex() -> i32:
+                let temp = 10
+                return temp * 2
+            let complex = get_complex()
+        "#),
+    ];
+    
+    let mut passed = 0;
+    let mut total = 0;
+    
+    for (name, code) in test_cases {
+        total += 1;
+        print!("Testing {}: ", name);
+        
+        match parse_and_analyze(code) {
+            Ok((program, analysis_result)) => {
+                println!("✅ PASS - {} statements parsed", program.statements.len());
+                if let Err(errors) = analysis_result {
+                    println!("   ⚠️  Semantic errors: {}", errors.len());
+                    for error in errors.iter().take(3) {
+                        println!("      - {}", error.message);
+                    }
+                } else {
+                    println!("   ✓ Semantic analysis passed");
+                }
+                passed += 1;
+            }
+            Err(e) => {
+                println!("❌ FAIL - {}", e);
+            }
+        }
+    }
+    
+    println!("\n=== Summary ===");
+    println!("Passed: {}/{} ({:.1}%)", passed, total, (passed as f64 / total as f64) * 100.0);
+    
+    // Performance test with large multi-line code
+    println!("\n=== Performance Test ===");
+    let large_code = (0..50).map(|i| format!("let var{} = {}", i, i * 2)).collect::<Vec<_>>().join("\n");
+    let start = std::time::Instant::now();
+    
+    match parse_and_analyze(&large_code) {
+        Ok((program, _)) => {
+            let duration = start.elapsed();
+            println!("✅ Parsed {} statements in {:?}", program.statements.len(), duration);
+        }
+        Err(e) => {
+            println!("❌ Performance test failed: {}", e);
+        }
+    }
+    
+    // Type checking demonstration
+    println!("\n=== Type Checking Demo ===");
+    let type_error_code = r#"
+        let x: i32 = "hello"
+        let y = x + true
+    "#;
+    
+    print!("Type error detection: ");
+    match parse_and_analyze(type_error_code) {
+        Ok((_, analysis_result)) => {
+            if let Err(errors) = analysis_result {
+                println!("✅ PASS - {} type errors detected", errors.len());
+                for error in &errors {
+                    println!("   - {}", error.message);
+                }
+            } else {
+                println!("❌ FAIL - No type errors detected");
+            }
+        }
+        Err(e) => {
+            println!("❌ FAIL - Parse error: {}", e);
+        }
+    }
+    
+    Ok(())
+}
+
+fn parse_and_analyze(input: &str) -> Result<(Program, Result<(), Vec<SemanticError>>), String> {
+    let mut lexer = Lexer::new(input.to_string(), "test.cor".to_string());
+    let tokens = lexer.tokenize().map_err(|e| format!("Lexer error: {}", e))?;
+    let mut parser = Parser::new(tokens, "test.cor".to_string());
+    let mut program = parser.parse().map_err(|e| format!("Parser error: {:?}", e))?;
+    
+    let mut analyzer = SemanticAnalyzer::new();
+    let analysis_result = analyzer.analyze(&mut program);
+    
+    Ok((program, analysis_result))
+}
+
+[[[src/parser.rs]]]
+use crate::ast::{
+    Program, Stmt, StmtKind, Expr, ExprKind, Type, 
+    BinaryOp, UnaryOp, Literal, Parameter, Field, MessageHandler, ObjectMethod,
+    SourceSpan
+};
+use crate::lexer::{Token, TokenType};
+use std::collections::HashMap;
+
+/// Parser errors with source location information
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParseError {
+    UnexpectedToken {
+        expected: String,
+        found: Token,
+    },
+    UnexpectedEof,
+    InvalidSyntax {
+        message: String,
+        span: SourceSpan,
+    },
+    DuplicateDefinition {
+        name: String,
+        span: SourceSpan,
+    },
+}
+
+impl ParseError {
+    pub fn span(&self) -> Option<&SourceSpan> {
+        match self {
+            ParseError::InvalidSyntax { span, .. } => Some(span),
+            ParseError::DuplicateDefinition { span, .. } => Some(span),
+            _ => None,
+        }
+    }
+}
+
+type ParseResult<T> = Result<T, ParseError>;
+
+/// Recursive descent parser for Coral
+pub struct Parser {
+    tokens: Vec<Token>,
+    current: usize,
+    file_name: String,
+    // TODO: Add arena allocator for AST nodes
+    // arena: Arena,
+}
+
+impl Parser {
+    pub fn new(tokens: Vec<Token>, file_name: String) -> Self {
+        Self {
+            tokens,
+            current: 0,
+            file_name,
+        }
+    }
+    
+    pub fn parse(&mut self) -> ParseResult<Program> {
+        // Pre-allocate based on token count heuristic
+        let estimated_statements = (self.tokens.len() / 8).max(4);
+        let mut statements = Vec::with_capacity(estimated_statements);
+        let start_span = self.current_span();
+        
+        while !self.is_at_end() {
+            self.skip_newlines();
+            // Skip any unexpected indentation at the top level
+            while self.check(TokenType::Indent) || self.check(TokenType::Dedent) {
+                self.advance();
+            }
+            if !self.is_at_end() {
+                statements.push(self.parse_statement()?);
+            }
+        }
+        
+        let end_span = if statements.is_empty() {
+            start_span.clone()
+        } else {
+            statements.last().unwrap().span.clone()
+        };
+        
+        Ok(Program {
+            statements,
+            span: SourceSpan::new(
+                self.file_name.clone(),
+                start_span.start_line,
+                start_span.start_col,
+                end_span.end_line,
+                end_span.end_col,
+            ),
+        })
+    }
+    
+    // Statement parsing
+    fn parse_statement(&mut self) -> ParseResult<Stmt> {
+        self.skip_newlines();
+        match self.peek().token_type {
+            TokenType::Fn => self.parse_function_statement(),
+            TokenType::Object => self.parse_object_statement(),
+            TokenType::Store => self.parse_store_statement(),
+            TokenType::Actor => self.parse_actor_statement(),
+            TokenType::If => self.parse_if_statement(),
+            TokenType::Unless => self.parse_unless_statement(),
+            TokenType::While => self.parse_while_statement(),
+            TokenType::Until => self.parse_until_statement(),
+            TokenType::For => self.parse_for_statement(),
+            TokenType::Iterate => self.parse_iterate_statement(),
+            TokenType::Return => self.parse_return_statement(),
+            TokenType::Break => self.parse_break_statement(),
+            TokenType::Continue => self.parse_continue_statement(),
+            TokenType::Import => self.parse_import_statement(),
+            _ => self.parse_expression_statement(),
+        }
+    }
+    
+    fn parse_function_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'fn'
+        
+        let name_token = self.consume(TokenType::Identifier, "Expected function name")?;
+        // Avoid cloning until we know we need it
+        
+        self.consume(TokenType::LeftParen, "Expected '(' after function name")?;
+        let params = self.parse_parameter_list()?;
+        self.consume(TokenType::RightParen, "Expected ')' after parameters")?;
+        
+        let return_type = if self.match_token(TokenType::Arrow) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        
+        self.skip_newlines();
+        let body = self.parse_block_statements()?;
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Function {
+            name: name_token.lexeme, // Move instead of clone
+            params,
+            return_type,
+            body,
+        }))
+    }
+    
+    fn parse_object_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'object'
+        
+        let name_token = self.consume(TokenType::Identifier, "Expected object name")?;
+        
+        self.skip_newlines();
+        
+        let (fields, methods) = self.parse_object_body()?;
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Object { 
+            name: name_token.lexeme, // Move instead of clone
+            fields, 
+            methods 
+        }))
+    }
+    
+    fn parse_store_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'store'
+        
+        let name_token = self.consume(TokenType::Identifier, "Expected store name")?;
+        let name = name_token.lexeme.clone();
+        
+        self.consume(TokenType::Colon, "Expected ':' after store name")?;
+        let value_type = self.parse_type()?;
+        
+        let initial_value = if self.match_token(TokenType::Equal) {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Store {
+            name,
+            value_type,
+            initial_value,
+        }))
+    }
+    
+    fn parse_actor_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'actor'
+        
+        let name_token = self.consume(TokenType::Identifier, "Expected actor name")?;
+        let name = name_token.lexeme.clone();
+        
+        self.consume(TokenType::Colon, "Expected ':' after actor name")?;
+        self.skip_newlines();
+        let handlers = self.parse_message_handlers()?;
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Actor { name, handlers }))
+    }
+    
+    fn parse_if_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'if'
+        
+        let condition = self.parse_expression()?;
+        self.skip_newlines();
+        let then_branch = self.parse_block_statements()?;
+        
+        let else_branch = if self.match_token(TokenType::Else) {
+            if self.check(TokenType::If) {
+                // else if
+                Some(vec![self.parse_if_statement()?])
+            } else {
+                self.skip_newlines();
+                let stmts = self.parse_block_statements()?;
+                Some(stmts)
+            }
+        } else {
+            None
+        };
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        }))
+    }
+    
+    fn parse_unless_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'unless'
+        
+        let condition = self.parse_expression()?;
+        self.skip_newlines();
+        let body = self.parse_block_statements()?;
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Unless { condition, body }))
+    }
+    
+    fn parse_while_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'while'
+        
+        let condition = self.parse_expression()?;
+        self.skip_newlines();
+        let body = self.parse_block_statements()?;
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::While { condition, body }))
+    }
+    
+    fn parse_until_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'until'
+        
+        let condition = self.parse_expression()?;
+        self.skip_newlines();
+        let body = self.parse_block_statements()?;
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Until { condition, body }))
+    }
+    
+    fn parse_for_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'for'
+        
+        let var_token = self.consume(TokenType::Identifier, "Expected variable name")?;
+        let variable = var_token.lexeme.clone();
+        
+        self.consume(TokenType::In, "Expected 'in' after for variable")?;
+        let iterable = self.parse_expression()?;
+        
+        self.skip_newlines();
+        let body = self.parse_block_statements()?;
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::For {
+            variable,
+            iterable,
+            body,
+        }))
+    }
+    
+    fn parse_iterate_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'iterate'
+        
+        let iterable = self.parse_expression()?;
+        self.skip_newlines();
+        let body = self.parse_block_statements()?;
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Iterate { iterable, body }))
+    }
+    
+    fn parse_return_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'return'
+        
+        let value = if self.check(TokenType::Newline) || self.check(TokenType::Eof) {
+            None
+        } else {
+            Some(self.parse_expression()?)
+        };
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Return(value)))
+    }
+    
+    fn parse_break_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'break'
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Break))
+    }
+    
+    fn parse_continue_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'continue'
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Continue))
+    }
+    
+    fn parse_import_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'import'
+        
+        let module_token = self.consume(TokenType::String, "Expected module name")?;
+        let module = module_token.lexeme.clone();
+        
+        let items = if self.match_token(TokenType::LeftBrace) {
+            let mut items = Vec::new();
+            
+            if !self.check(TokenType::RightBrace) {
+                loop {
+                    let item = self.consume(TokenType::Identifier, "Expected import item")?;
+                    items.push(item.lexeme.clone());
+                    
+                    if !self.match_token(TokenType::Comma) {
+                        break;
+                    }
+                }
+            }
+            
+            self.consume(TokenType::RightBrace, "Expected '}' after import items")?;
+            Some(items)
+        } else {
+            None
+        };
+        
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Import { module, items }))
+    }
+    
+    fn parse_expression_statement(&mut self) -> ParseResult<Stmt> {
+        let expr = self.parse_expression()?;
+        
+        // Check for assignment with 'is' (Coral syntax) or '=' (legacy)
+        if self.match_token(TokenType::Is) || self.match_token(TokenType::Equal) {
+            let value = self.parse_expression()?;
+            
+            let span = SourceSpan::new(
+                self.file_name.clone(),
+                expr.span.start_line,
+                expr.span.start_col,
+                value.span.end_line,
+                value.span.end_col,
+            );
+            
+            return Ok(Stmt::new(span, StmtKind::Assignment {
+                target: expr,
+                value,
+            }));
+        }
+        
+        let span = expr.span.clone();
+        Ok(Stmt::new(span, StmtKind::Expression(expr)))
+    }
+    
+    // Expression parsing with precedence climbing
+    fn parse_expression(&mut self) -> ParseResult<Expr> {
+        self.parse_ternary()
+    }
+    
+    fn parse_ternary(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.parse_logical_or()?;
+        
+        if self.match_token(TokenType::Question) {
+            let then_expr = self.parse_ternary()?; // Allow nested ternary (right-associative)
+            self.consume(TokenType::Bang, "Expected '!' after ternary then branch")?;
+            let else_expr = self.parse_ternary()?; // Allow nested ternary (right-associative)
+            
+            let span = self.span_between(&expr.span, &else_expr.span);
+            expr = Expr::new(span, ExprKind::If {
+                condition: Box::new(expr),
+                then_branch: Box::new(then_expr),
+                else_branch: Some(Box::new(else_expr)),
+            });
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_logical_or(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.parse_logical_and()?;
+        
+        while self.match_token(TokenType::Or) || self.match_token(TokenType::LogicalOr) {
+            let right = self.parse_logical_and()?;
+            let span = self.span_between(&expr.span, &right.span);
+            expr = Expr::new(span, ExprKind::binary(BinaryOp::Or, expr, right));
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_logical_and(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.parse_equality()?;
+        
+        while self.match_token(TokenType::And) || self.match_token(TokenType::LogicalAnd) {
+            let right = self.parse_equality()?;
+            let span = self.span_between(&expr.span, &right.span);
+            expr = Expr::new(span, ExprKind::binary(BinaryOp::And, expr, right));
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_equality(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.parse_comparison()?;
+        
+        while let Some(op) = self.match_equality_op() {
+            let right = self.parse_comparison()?;
+            let span = self.span_between(&expr.span, &right.span);
+            expr = Expr::new(span, ExprKind::binary(op, expr, right));
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_comparison(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.parse_bitwise_or()?;
+        
+        while let Some(op) = self.match_comparison_op() {
+            let right = self.parse_bitwise_or()?;
+            let span = self.span_between(&expr.span, &right.span);
+            expr = Expr::new(span, ExprKind::binary(op, expr, right));
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_bitwise_or(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.parse_bitwise_xor()?;
+        
+        while self.match_token(TokenType::Pipe) {
+            let right = self.parse_bitwise_xor()?;
+            let span = self.span_between(&expr.span, &right.span);
+            expr = Expr::new(span, ExprKind::binary(BinaryOp::BitOr, expr, right));
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_bitwise_xor(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.parse_bitwise_and()?;
+        
+        while self.match_token(TokenType::Caret) {
+            let right = self.parse_bitwise_and()?;
+            let span = self.span_between(&expr.span, &right.span);
+            expr = Expr::new(span, ExprKind::binary(BinaryOp::BitXor, expr, right));
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_bitwise_and(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.parse_shift()?;
+        
+        while self.match_token(TokenType::Ampersand) {
+            let right = self.parse_shift()?;
+            let span = self.span_between(&expr.span, &right.span);
+            expr = Expr::new(span, ExprKind::binary(BinaryOp::BitAnd, expr, right));
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_shift(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.parse_term()?;
+        
+        while let Some(op) = self.match_shift_op() {
+            let right = self.parse_term()?;
+            let span = self.span_between(&expr.span, &right.span);
+            expr = Expr::new(span, ExprKind::binary(op, expr, right));
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_term(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.parse_factor()?;
+        
+        while let Some(op) = self.match_term_op() {
+            let right = self.parse_factor()?;
+            let span = self.span_between(&expr.span, &right.span);
+            expr = Expr::new(span, ExprKind::binary(op, expr, right));
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_factor(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.parse_unary()?;
+        
+        while let Some(op) = self.match_factor_op() {
+            let right = self.parse_unary()?;
+            let span = self.span_between(&expr.span, &right.span);
+            expr = Expr::new(span, ExprKind::binary(op, expr, right));
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_unary(&mut self) -> ParseResult<Expr> {
+        if let Some(op) = self.match_unary_op() {
+            let operand = self.parse_unary()?;
+            let span = self.span_from_current();
+            return Ok(Expr::new(span, ExprKind::Unary {
+                op,
+                operand: Box::new(operand),
+            }));
+        }
+        
+        self.parse_postfix()
+    }
+    
+    fn parse_postfix(&mut self) -> ParseResult<Expr> {
+        let mut expr = self.parse_primary()?;
+        
+        loop {
+            if self.match_token(TokenType::LeftParen) {
+                // Function call
+                let args = self.parse_argument_list()?;
+                self.consume(TokenType::RightParen, "Expected ')' after arguments")?;
+                
+                let span = self.span_from_current();
+                expr = Expr::new(span, ExprKind::call(expr, args));
+            } else if self.match_token(TokenType::LeftBracket) {
+                // Index access
+                let index = self.parse_expression()?;
+                self.consume(TokenType::RightBracket, "Expected ']' after index")?;
+                
+                let span = self.span_between(&expr.span, &index.span);
+                expr = Expr::new(span, ExprKind::Index {
+                    object: Box::new(expr),
+                    index: Box::new(index),
+                });
+            } else if self.match_token(TokenType::Dot) {
+                // Field access
+                let field_token = self.consume(TokenType::Identifier, "Expected field name")?;
+                let field = field_token.lexeme.clone();
+                
+                let span = self.span_from_token(&field_token);
+                expr = Expr::new(span, ExprKind::FieldAccess {
+                    object: Box::new(expr),
+                    field,
+                });
+            } else {
+                break;
+            }
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_primary(&mut self) -> ParseResult<Expr> {   
+        let token = self.peek().clone();
+        let span = self.token_to_span(&token);
+        
+        match &token.token_type {
+            TokenType::Integer => {
+                self.advance();
+                let lexeme_str = token.lexeme.as_str();
+                let value = if lexeme_str.starts_with("0x") || lexeme_str.starts_with("0X") {
+                    i64::from_str_radix(&lexeme_str[2..], 16)
+                } else if lexeme_str.starts_with('b') {
+                    i64::from_str_radix(&lexeme_str[1..], 2)
+                } else {
+                    lexeme_str.parse::<i64>()
+                }
+                .map_err(|e| ParseError::InvalidSyntax {
+                    message: format!("Invalid integer literal '{}': {}", lexeme_str, e),
+                    span: span.clone(),
+                })?;
+                Ok(Expr::new(span, ExprKind::literal(Literal::Integer(value))))
+            }
+            TokenType::Float => {
+                self.advance();
+                let value = token.lexeme.parse::<f64>()
+                    .map_err(|e| ParseError::InvalidSyntax {
+                        message: format!("Invalid float literal '{}': {}", token.lexeme, e),
+                        span: span.clone(),
+                    })?;
+                Ok(Expr::new(span, ExprKind::literal(Literal::Float(value))))
+            }
+            TokenType::String => {
+                self.advance();
+                Ok(Expr::new(span, ExprKind::literal(Literal::String(token.lexeme.clone()))))
+            }
+            TokenType::InterpolatedString => {
+                self.advance();
+                let parts = self.parse_string_interpolation_from_content(&token.lexeme)?;
+                Ok(Expr::new(span, ExprKind::StringInterpolation { parts }))
+            }
+            TokenType::True => {
+                self.advance();
+                Ok(Expr::new(span, ExprKind::literal(Literal::Bool(true))))
+            }
+            TokenType::False => {
+                self.advance();
+                Ok(Expr::new(span, ExprKind::literal(Literal::Bool(false))))
+            }
+            // Coral-specific literals
+            TokenType::No => {
+                self.advance();
+                Ok(Expr::new(span, ExprKind::literal(Literal::No)))
+            }
+            TokenType::Yes => {
+                // In Coral, 'yes' is equivalent to 'true'
+                self.advance();
+                Ok(Expr::new(span, ExprKind::literal(Literal::Bool(true))))
+            }
+            TokenType::Empty => {
+                self.advance();
+                Ok(Expr::new(span, ExprKind::literal(Literal::Empty)))
+            }
+            TokenType::Now => {
+                self.advance();
+                Ok(Expr::new(span, ExprKind::literal(Literal::Now)))
+            }
+            TokenType::Identifier => {
+                self.advance();
+                Ok(Expr::new(span, ExprKind::identifier(token.lexeme.clone())))
+            }
+            TokenType::Dollar => {
+                // $ refers to the current iteration item in Coral
+                self.advance();
+                Ok(Expr::new(span, ExprKind::identifier("$".to_string())))
+            }
+            TokenType::LeftParen => {
+                self.advance();
+                
+                // Check if this is a parenthesized expression, list literal, or map literal
+                if self.check(TokenType::RightParen) {
+                    // Empty list
+                    self.advance(); // consume ')'
+                    return Ok(Expr::new(span, ExprKind::ListLiteral(Vec::new())));
+                }
+                
+                // Parse first expression
+                let first_expr = self.parse_expression()?;
+                
+                if self.match_token(TokenType::Colon) {
+                    // This is a map literal
+                    let mut pairs = Vec::new();
+                    let first_value = self.parse_expression()?;
+                    pairs.push((first_expr, first_value));
+                    
+                    while self.match_token(TokenType::Comma) {
+                        let key = self.parse_expression()?;
+                        self.consume(TokenType::Colon, "Expected ':' after map key")?;
+                        let value = self.parse_expression()?;
+                        pairs.push((key, value));
+                    }
+                    
+                    self.consume(TokenType::RightParen, "Expected ')' after map pairs")?;
+                    Ok(Expr::new(span, ExprKind::MapLiteral(pairs)))
+                } else if self.match_token(TokenType::Comma) {
+                    // This is a list literal - parse remaining elements
+                    let mut elements = vec![first_expr];
+                    
+                    if !self.check(TokenType::RightParen) {
+                        loop {
+                            elements.push(self.parse_expression()?);
+                            if !self.match_token(TokenType::Comma) {
+                                break;
+                            }
+                        }
+                    }
+                    
+                    self.consume(TokenType::RightParen, "Expected ')' after list elements")?;
+                    Ok(Expr::new(span, ExprKind::ListLiteral(elements)))
+                } else {
+                    // This is a parenthesized expression
+                    self.consume(TokenType::RightParen, "Expected ')' after expression")?;
+                    Ok(first_expr)
+                }
+            }
+            TokenType::LeftBracket => {
+                self.advance();
+                let elements = if self.check(TokenType::RightBracket) {
+                    Vec::new()
+                } else {
+                    self.parse_expression_list()?
+                };
+                self.consume(TokenType::RightBracket, "Expected ']' after list elements")?;
+                Ok(Expr::new(span, ExprKind::ListLiteral(elements)))
+            }
+            TokenType::LeftBrace => {
+                // Only parse map literals, no braced statement blocks
+                self.parse_map_literal()
+            }
+            TokenType::If => self.parse_if_expression(),
+            TokenType::Fn => self.parse_lambda_expression(),
+            _ => Err(ParseError::UnexpectedToken {
+                expected: "expression".to_string(),
+                found: token.clone(),
+            }),
+        }
+    }
+    
+    fn parse_if_expression(&mut self) -> ParseResult<Expr> {
+        let start = self.advance(); // consume 'if'
+        
+        let condition = self.parse_expression()?;
+        self.skip_newlines();
+        let then_stmts = self.parse_block_statements()?;
+        
+        let else_branch = if self.match_token(TokenType::Else) {
+            if self.check(TokenType::If) {
+                Some(Box::new(self.parse_if_expression()?))
+            } else {
+                self.skip_newlines();
+                let else_stmts = self.parse_block_statements()?;
+                
+                let span = self.span_from_current();
+                Some(Box::new(Expr::new(span, ExprKind::Block(else_stmts))))
+            }
+        } else {
+            None
+        };
+        
+        let span = self.span_from_token(&start);
+        Ok(Expr::new(span.clone(), ExprKind::If {
+            condition: Box::new(condition),
+            then_branch: Box::new(Expr::new(span.clone(), ExprKind::Block(then_stmts))),
+            else_branch,
+        }))
+    }
+    
+    fn parse_lambda_expression(&mut self) -> ParseResult<Expr> {
+        let start = self.advance(); // consume 'fn'
+        
+        self.consume(TokenType::LeftParen, "Expected '(' after 'fn'")?;
+        let params = self.parse_parameter_list()?;
+        self.consume(TokenType::RightParen, "Expected ')' after parameters")?;
+        
+        if self.match_token(TokenType::Arrow) {
+            let body = self.parse_expression()?;
+            let span = self.span_from_token(&start);
+            Ok(Expr::new(span, ExprKind::Lambda {
+                params,
+                body: Box::new(body),
+            }))
+        } else {
+            self.skip_newlines();
+            let stmts = self.parse_block_statements()?;
+            
+            let span = self.span_from_token(&start);
+            Ok(Expr::new(span.clone(), ExprKind::Lambda {
+                params,
+                body: Box::new(Expr::new(span.clone(), ExprKind::Block(stmts))),
+            }))
+        }
+    }
+    
+    fn parse_map_literal(&mut self) -> ParseResult<Expr> {
+        let start = self.advance(); // consume '{'
+        let mut pairs = Vec::new();
+        
+        if !self.check(TokenType::RightBrace) {
+            loop {
+                let key = self.parse_expression()?;
+                self.consume(TokenType::Colon, "Expected ':' after map key")?;
+                let value = self.parse_expression()?;
+                pairs.push((key, value));
+                
+                if !self.match_token(TokenType::Comma) {
+                    break;
+                }
+            }
+        }
+        
+        self.consume(TokenType::RightBrace, "Expected '}' after map pairs")?;
+        
+        let span = self.span_from_token(&start);
+        Ok(Expr::new(span, ExprKind::MapLiteral(pairs)))
+    }
+    
+    // Helper methods for parsing components
+    fn parse_parameter_list(&mut self) -> ParseResult<Vec<Parameter>> {
+        let mut params = Vec::with_capacity(4); // Most functions have 0-4 parameters
+        
+        if !self.check(TokenType::RightParen) {
+            loop {
+                let name_token = self.consume(TokenType::Identifier, "Expected parameter name")?;
+                let name = name_token.lexeme.clone();
+                
+                // Check for type annotation (param: type) or default value
+                let (type_, default_value) = if self.match_token(TokenType::Colon) {
+                    // Traditional typed parameter: param: type
+                    let type_ = self.parse_type()?;
+                    (type_, None)
+                } else {
+                    // Coral-style parameter with optional default value
+                    let default_value = self.try_parse_default_value();
+                    (Type::Unknown, default_value) // Type will be inferred
+                };
+                
+                let span = self.token_to_span(&name_token);
+                params.push(Parameter { 
+                    name, 
+                    type_, 
+                    default_value,
+                    span 
+                });
+                
+                if !self.match_token(TokenType::Comma) {
+                    break;
+                }
+            }
+        }
+        
+        Ok(params)
+    }
+
+    /// Parse a default value for a parameter using lookahead instead of backtracking
+    fn try_parse_default_value(&mut self) -> Option<Expr> {
+        // Use lookahead to determine if we can parse an expression
+        if self.is_expression_start() {
+            match self.parse_expression() {
+                Ok(expr) => Some(expr),
+                Err(_) => None, // Should not happen if lookahead is correct
+            }
+        } else {
+            None
+        }
+    }
+    
+    /// Check if the current token could start an expression (lookahead)
+    fn is_expression_start(&self) -> bool {
+        match self.peek().token_type {
+            TokenType::Integer | TokenType::Float | TokenType::String | 
+            TokenType::InterpolatedString | TokenType::True | TokenType::False |
+            TokenType::No | TokenType::Yes | TokenType::Empty | TokenType::Now |
+            TokenType::Identifier | TokenType::Dollar |
+            TokenType::LeftParen | TokenType::LeftBracket | TokenType::LeftBrace |
+            TokenType::If | TokenType::Fn |
+            TokenType::Bang | TokenType::Minus | TokenType::Tilde => true,
+            _ => false,
+        }
+    }
+    
+    fn parse_argument_list(&mut self) -> ParseResult<Vec<Expr>> {
+        if self.check(TokenType::RightParen) {
+            return Ok(Vec::new());
+        }
+        
+        self.parse_expression_list()
+    }
+    
+    fn parse_expression_list(&mut self) -> ParseResult<Vec<Expr>> {
+        let mut exprs = Vec::with_capacity(2); // Most expression lists are small
+        
+        loop {
+            exprs.push(self.parse_expression()?);
+            
+            if !self.match_token(TokenType::Comma) {
+                break;
+            }
+        }
+        
+        Ok(exprs)
+    }
+
+    
+    fn parse_object_body(&mut self) -> ParseResult<(Vec<Field>, Vec<ObjectMethod>)> {
+        let mut fields = Vec::new();
+        let mut methods = Vec::new();
+        
+        // Expect an Indent token to start the object body
+        if !self.match_token(TokenType::Indent) {
+            return Err(ParseError::UnexpectedToken {
+                expected: "indented block".to_string(),
+                found: self.peek().clone(),
+            });
+        }
+        
+        while !self.check(TokenType::Dedent) && !self.is_at_end() {
+            self.skip_newlines();
+            if self.check(TokenType::Dedent) || self.is_at_end() {
+                break;
+            }
+            
+            let name_token = self.consume(TokenType::Identifier, "Expected field or method name")?;
+            let name = name_token.lexeme.clone();
+            
+            // Check if this is a field or method
+            // Field patterns:
+            //   name: type
+            //   name: type = default
+            //   name ? default  (Coral syntax)
+            // Method patterns:
+            //   name
+            //   name(params)
+            //   name -> type
+            //   name: (at end of line, starts indented block)
+            
+            if self.check(TokenType::Colon) {
+                // Could be field with type or method with body
+                if self.check_at_offset(1, TokenType::Newline) || self.check_at_offset(1, TokenType::Indent) {
+                    // This is a method: name: (starts indented block)
+                    self.advance(); // consume ':'
+                    
+                    let params = Vec::new(); // TODO: Handle method parameters
+                    let return_type = None;
+                    
+                    self.skip_newlines();
+                    let body = self.parse_block_statements()?;
+                    
+                    let span = self.token_to_span(&name_token);
+                    methods.push(ObjectMethod { name, params, return_type, body, span });
+                } else {
+                    // This is a field: name: type
+                    self.advance(); // consume ':'
+                    let type_ = self.parse_type()?;
+                    
+                    let default_value = if self.match_token(TokenType::Question) {
+                        // Coral syntax: field: type ? default_value
+                        Some(self.parse_expression()?)
+                    } else if self.match_token(TokenType::Equal) {
+                        // Traditional syntax: field: type = default_value
+                        Some(self.parse_expression()?)
+                    } else {
+                        None
+                    };
+                    
+                    let span = self.token_to_span(&name_token);
+                    fields.push(Field { name, type_, default_value, span });
+                }
+            } else if self.check(TokenType::Question) {
+                // Coral field syntax: name ? default_value
+                self.advance(); // consume '?'
+                let default_value = Some(self.parse_expression()?);
+                let type_ = Type::Unknown; // Type will be inferred from default value
+                
+                let span = self.token_to_span(&name_token);
+                fields.push(Field { name, type_, default_value, span });
+            } else if self.check(TokenType::LeftParen) {
+                // Method with parameters: name(params)
+                self.advance(); // consume '('
+                let params = self.parse_parameter_list()?;
+                self.consume(TokenType::RightParen, "Expected ')' after parameters")?;
+                
+                let return_type = if self.match_token(TokenType::Arrow) {
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+                
+                self.consume(TokenType::Colon, "Expected ':' before method body")?;
+                self.skip_newlines();
+                let body = self.parse_block_statements()?;
+                
+                let span = self.token_to_span(&name_token);
+                methods.push(ObjectMethod { name, params, return_type, body, span });
+            } else {
+                // Simple field with inferred type: name
+                let type_ = Type::Unknown; // Type will be inferred
+                let default_value = None;
+                
+                let span = self.token_to_span(&name_token);
+                fields.push(Field { name, type_, default_value, span });
+            }
+            
+            self.skip_newlines();
+        }
+        
+        // Consume the closing Dedent token
+        if self.check(TokenType::Dedent) {
+            self.advance();
+        }
+        
+        Ok((fields, methods))
+    }
+    
+    fn parse_message_handlers(&mut self) -> ParseResult<Vec<MessageHandler>> {
+        let mut handlers = Vec::new();
+        
+        // Expect an Indent token to start the handlers block
+        if !self.match_token(TokenType::Indent) {
+            return Err(ParseError::UnexpectedToken {
+                expected: "indented block".to_string(),
+                found: self.peek().clone(),
+            });
+        }
+        
+        while !self.check(TokenType::Dedent) && !self.is_at_end() {
+            self.skip_newlines();
+            if self.check(TokenType::Dedent) || self.is_at_end() {
+                break;
+            }
+            
+            let start_token = self.peek().clone();
+            let message_type = self.parse_type()?;
+            
+            self.consume(TokenType::Arrow, "Expected '=>' after message type")?;
+            self.consume(TokenType::Colon, "Expected ':' after '=>'")?;
+            self.skip_newlines();
+            let body = self.parse_block_statements()?;
+            
+            let span = self.token_to_span(&start_token);
+            handlers.push(MessageHandler { message_type, body, span });
+        }
+        
+        // Consume the closing Dedent token
+        if self.check(TokenType::Dedent) {
+            self.advance();
+        }
+        
+        Ok(handlers)
+    }
+    
+    /// Parse an indented block of statements
+    fn parse_block_statements(&mut self) -> ParseResult<Vec<Stmt>> {
+        let mut statements = Vec::new();
+        
+        // Expect an Indent token to start the block
+        if !self.match_token(TokenType::Indent) {
+            return Err(ParseError::UnexpectedToken {
+                expected: "indented block".to_string(),
+                found: self.peek().clone(),
+            });
+        }
+        
+        // Parse statements until we hit a Dedent token
+        while !self.check(TokenType::Dedent) && !self.is_at_end() {
+            self.skip_newlines();
+            if !self.check(TokenType::Dedent) && !self.is_at_end() {
+                statements.push(self.parse_statement()?);
+            }
+        }
+        
+        // Consume the Dedent token
+        if !self.match_token(TokenType::Dedent) {
+            return Err(ParseError::UnexpectedToken {
+                expected: "dedent to close block".to_string(),
+                found: self.peek().clone(),
+            });
+        }
+        
+        Ok(statements)
+    }
+    
+    fn parse_type(&mut self) -> ParseResult<Type> {
+        let token = self.peek().clone();
+        
+        match &token.token_type {
+            TokenType::Identifier => {
+                self.advance();
+                match token.lexeme.as_str() {
+                    "i8" => Ok(Type::I8),
+                    "i16" => Ok(Type::I16),
+                    "i32" => Ok(Type::I32),
+                    "i64" => Ok(Type::I64),
+                    "f32" => Ok(Type::F32),
+                    "f64" => Ok(Type::F64),
+                    "bool" => Ok(Type::Bool),
+                    "string" => Ok(Type::String),
+                    "unit" => Ok(Type::Unit),
+                    name => {
+                        // User-defined type - for now just create an object type
+                        Ok(Type::Object {
+                            name: name.to_string(),
+                            fields: HashMap::new(),
+                        })
+                    }
+                }
+            }
+            TokenType::LeftParen => {
+                self.advance();
+                
+                // Check if this is a list type (Type) or map type (Key: Value)
+                if self.check(TokenType::RightParen) {
+                    // Empty list type: ()
+                    self.advance(); // consume ')'
+                    return Ok(Type::List(Box::new(Type::Unknown)));
+                }
+                
+                let first_type = self.parse_type()?;
+                
+                if self.match_token(TokenType::Colon) {
+                    // This is a map type: (KeyType: ValueType)
+                    let value_type = self.parse_type()?;
+                    self.consume(TokenType::RightParen, "Expected ')' after map types")?;
+                    Ok(Type::Map(Box::new(first_type), Box::new(value_type)))
+                } else {
+                    // This is a list type: (ElementType)
+                    self.consume(TokenType::RightParen, "Expected ')' after list element type")?;
+                    Ok(Type::List(Box::new(first_type)))
+                }
+            }
+            TokenType::Fn => {
+                self.advance();
+                self.consume(TokenType::LeftParen, "Expected '(' after 'fn' in function type")?;
+                
+                let mut param_types = Vec::new();
+                if !self.check(TokenType::RightParen) {
+                    loop {
+                        param_types.push(self.parse_type()?);
+                        if !self.match_token(TokenType::Comma) {
+                            break;
+                        }
+                    }
+                }
+                
+                self.consume(TokenType::RightParen, "Expected ')' after function parameters")?;
+                self.consume(TokenType::Arrow, "Expected '->' after function parameters")?;
+                let return_type = self.parse_type()?;
+                
+                Ok(Type::Function {
+                    params: param_types,
+                    return_type: Box::new(return_type),
+                })
+            }
+            _ => Err(ParseError::UnexpectedToken {
+                expected: "type".to_string(),
+                found: token.clone(),
+            }),
+        }
+    }
+    
+    /// Skip only newline tokens, NOT indent/dedent tokens
+    /// Optimized version that caches is_at_end check
+    fn skip_newlines(&mut self) {
+        while self.current < self.tokens.len() && 
+              self.tokens[self.current].token_type == TokenType::Newline {
+            self.current += 1;
+        }
+    }
+    
+
+
+    // Operator matching helpers - optimized with lookup tables
+    fn match_equality_op(&mut self) -> Option<BinaryOp> {
+        if self.current >= self.tokens.len() {
+            return None;
+        }
+        
+        let op = match self.tokens[self.current].token_type {
+            TokenType::EqualEqual => Some(BinaryOp::Eq),
+            TokenType::BangEqual => Some(BinaryOp::Ne),
+            _ => None,
+        };
+        
+        if op.is_some() {
+            self.current += 1;
+        }
+        op
+    }
+    
+    fn match_comparison_op(&mut self) -> Option<BinaryOp> {
+        if self.current >= self.tokens.len() {
+            return None;
+        }
+        
+        let op = match self.tokens[self.current].token_type {
+            TokenType::Greater => Some(BinaryOp::Gt),
+            TokenType::GreaterEqual => Some(BinaryOp::Ge),
+            TokenType::Less => Some(BinaryOp::Lt),
+            TokenType::LessEqual => Some(BinaryOp::Le),
+            _ => None,
+        };
+        
+        if op.is_some() {
+            self.current += 1;
+        }
+        op
+    }
+    
+    fn match_shift_op(&mut self) -> Option<BinaryOp> {
+        if self.current >= self.tokens.len() {
+            return None;
+        }
+        
+        let op = match self.tokens[self.current].token_type {
+            TokenType::LeftShift => Some(BinaryOp::Shl),
+            TokenType::RightShift => Some(BinaryOp::Shr),
+            _ => None,
+        };
+        
+        if op.is_some() {
+            self.current += 1;
+        }
+        op
+    }
+    
+    fn match_term_op(&mut self) -> Option<BinaryOp> {
+        if self.current >= self.tokens.len() {
+            return None;
+        }
+        
+        let op = match self.tokens[self.current].token_type {
+            TokenType::Plus => Some(BinaryOp::Add),
+            TokenType::Minus => Some(BinaryOp::Sub),
+            _ => None,
+        };
+        
+        if op.is_some() {
+            self.current += 1;
+        }
+        op
+    }
+    
+    fn match_factor_op(&mut self) -> Option<BinaryOp> {
+        if self.current >= self.tokens.len() {
+            return None;
+        }
+        
+        let op = match self.tokens[self.current].token_type {
+            TokenType::Star => Some(BinaryOp::Mul),
+            TokenType::Slash => Some(BinaryOp::Div),
+            TokenType::Percent => Some(BinaryOp::Mod),
+            _ => None,
+        };
+        
+        if op.is_some() {
+            self.current += 1;
+        }
+        op
+    }
+    
+    fn match_unary_op(&mut self) -> Option<UnaryOp> {
+        if self.current >= self.tokens.len() {
+            return None;
+        }
+        
+        let op = match self.tokens[self.current].token_type {
+            TokenType::Bang => Some(UnaryOp::Not),
+            TokenType::Minus => Some(UnaryOp::Neg),
+            TokenType::Tilde => Some(UnaryOp::BitNot),
+            _ => None,
+        };
+        
+        if op.is_some() {
+            self.current += 1;
+        }
+        
+        op
+    }
+    
+
+    
+    fn match_token(&mut self, token_type: TokenType) -> bool {
+        if self.check(token_type) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+    
+    fn check(&self, token_type: TokenType) -> bool {
+        if self.is_at_end() {
+            false
+        } else {
+            self.peek().token_type == token_type
+        }
+    }
+    
+    fn advance(&mut self) -> Token {
+        if !self.is_at_end() {
+            self.current += 1;
+        }
+        self.previous()
+    }
+    
+    fn is_at_end(&self) -> bool {
+        self.current >= self.tokens.len() || self.peek().token_type == TokenType::Eof
+    }
+    
+    fn peek(&self) -> &Token {
+        &self.tokens[self.current]
+    }
+    
+    fn previous(&self) -> Token {
+        self.tokens[self.current - 1].clone()
+    }
+    
+    fn check_at_offset(&self, offset: usize, token_type: TokenType) -> bool {
+        if self.current + offset >= self.tokens.len() {
+            false
+        } else {
+            self.tokens[self.current + offset].token_type == token_type
+        }
+    }
+    
+    fn consume(&mut self, token_type: TokenType, message: &str) -> ParseResult<Token> {
+        if self.check(token_type) {
+            Ok(self.advance())
+        } else {
+            Err(ParseError::UnexpectedToken {
+                expected: message.to_string(),
+                found: self.peek().clone(),
+            })
+        }
+    }
+    
+    // Source span helpers
+    fn current_span(&self) -> SourceSpan {
+        self.token_to_span(self.peek())
+    }
+    
+    fn span_from_current(&self) -> SourceSpan {
+        // Safe bounds checking - performance impact is negligible in parsing context
+        if self.current > 0 {
+            let token = &self.tokens[self.current - 1];
+            self.token_to_span(token)
+        } else {
+            self.current_span()
+        }
+    }
+    
+    fn span_from_token(&self, token: &Token) -> SourceSpan {
+        self.token_to_span(token)
+    }
+    
+    fn token_to_span(&self, token: &Token) -> SourceSpan {
+        // Cache file_name to avoid cloning on every span creation
+        SourceSpan::new(
+            self.file_name.clone(), // TODO: Use Arc<String> to avoid cloning
+            token.line as u32,
+            token.column as u32,
+            token.line as u32,
+            (token.column + token.lexeme.len()) as u32,
+        )
+    }
+    
+    fn span_between(&self, start: &SourceSpan, end: &SourceSpan) -> SourceSpan {
+        SourceSpan::new(
+            self.file_name.clone(),
+            start.start_line,
+            start.start_col,
+            end.end_line,
+            end.end_col,
+        )
+    }
+    
+    fn parse_string_interpolation_from_content(&mut self, content: &str) -> ParseResult<Vec<crate::ast::StringPart>> {
+        use crate::ast::StringPart;
+        
+        let mut parts = Vec::with_capacity(4); // Pre-allocate for typical case
+        let mut current_text = String::with_capacity(content.len());
+        let mut chars = content.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            match ch {
+                '{' => {
+                    if chars.peek() == Some(&'{') {
+                        // Escaped brace: {{
+                        chars.next();
+                        current_text.push('{');
+                    } else {
+                        // Start of interpolation - use optimized parsing
+                        if !current_text.is_empty() {
+                            parts.push(StringPart::Literal(std::mem::take(&mut current_text)));
+                        }
+                        
+                        let expr = self.parse_interpolated_expression(&mut chars)?;
+                        parts.push(StringPart::Expression(expr));
+                    }
+                }
+                '}' => {
+                    if chars.peek() == Some(&'}') {
+                        // Escaped brace: }}
+                        chars.next();
+                        current_text.push('}');
+                    } else {
+                        current_text.push(ch);
+                    }
+                }
+                '\\' => {
+                    self.handle_escape_sequence(&mut current_text, &mut chars);
+                }
+                _ => {
+                    current_text.push(ch);
+                }
+            }
+        }
+        
+        // Add remaining text
+        if !current_text.is_empty() {
+            parts.push(StringPart::Literal(current_text));
+        } else if !parts.is_empty() {
+            // If we ended with an expression, add empty literal for consistency with tests
+            if matches!(parts.last(), Some(StringPart::Expression(_))) {
+                parts.push(StringPart::Literal(String::new()));
+            }
+        }
+        
+        // Ensure we always have at least one part
+        if parts.is_empty() {
+            parts.push(StringPart::Literal(String::new()));
+        }
+        
+        Ok(parts)
+    }
+
+    /// Parse an interpolated expression using inline tokenization to avoid allocations
+    fn parse_interpolated_expression(&mut self, chars: &mut std::iter::Peekable<std::str::Chars>) -> ParseResult<Expr> {
+        let mut expr_text = String::new();
+        let mut brace_depth = 1;
+        
+        // Extract expression content with minimal allocations
+        while let Some(expr_ch) = chars.next() {
+            match expr_ch {
+                '{' => {
+                    brace_depth += 1;
+                    expr_text.push(expr_ch);
+                }
+                '}' => {
+                    brace_depth -= 1;
+                    if brace_depth == 0 {
+                        break;
+                    }
+                    expr_text.push(expr_ch);
+                }
+                _ => expr_text.push(expr_ch),
+            }
+        }
+        
+        if brace_depth > 0 {
+            return Err(ParseError::InvalidSyntax {
+                message: "Unclosed interpolation brace in string".to_string(),
+                span: self.span_from_current(),
+            });
+        }
+        
+        if expr_text.trim().is_empty() {
+            return Err(ParseError::InvalidSyntax {
+                message: "Empty interpolation expression".to_string(),
+                span: self.span_from_current(),
+            });
+        }
+        
+        // Fast path for simple identifiers (most common case)
+        let trimmed = expr_text.trim();
+        if self.is_simple_identifier(trimmed) {
+            return Ok(Expr::new(
+                self.span_from_current(),
+                ExprKind::identifier(trimmed.to_string())
+            ));
+        }
+        
+        // Fall back to full parsing for complex expressions
+        self.parse_expression_from_string(&expr_text)
+    }
+    
+    /// Check if a string is a simple identifier (performance optimization)
+    fn is_simple_identifier(&self, s: &str) -> bool {
+        !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+    }
+
+    fn handle_escape_sequence(&mut self, current_text: &mut String, chars: &mut std::iter::Peekable<std::str::Chars>) {
+        if let Some(escaped) = chars.next() {
+            match escaped {
+                'n' => current_text.push('\n'),
+                't' => current_text.push('\t'),
+                'r' => current_text.push('\r'),
+                '\\' => current_text.push('\\'),
+                '\'' => current_text.push('\''),
+                '"' => current_text.push('"'),
+                '{' => current_text.push('{'),
+                '}' => current_text.push('}'),
+                c => {
+                    current_text.push('\\');
+                    current_text.push(c);
+                }
+            }
+        } else {
+            current_text.push('\\');
+        }
+    }
+    
+    fn parse_expression_from_string(&mut self, expr_str: &str) -> ParseResult<Expr> {
+        // Create a mini lexer and parser for the expression
+        use crate::lexer::Lexer;
+        
+        let mut lexer = Lexer::new(expr_str.to_string(), self.file_name.clone());
+        let tokens = lexer.tokenize().map_err(|e| ParseError::InvalidSyntax {
+            message: format!("Lexer error in interpolated expression '{}': {}", expr_str, e),
+            span: self.span_from_current(),
+        })?;
+        
+        let mut expr_parser = Parser::new(tokens, self.file_name.clone());
+        expr_parser.parse_expression().map_err(|e| {
+            // Preserve the original error type and provide better context
+            match e {
+                ParseError::UnexpectedToken { expected, found } => ParseError::InvalidSyntax {
+                    message: format!(
+                        "Invalid interpolated expression '{}': expected {}, found {}",
+                        expr_str, expected, found.lexeme
+                    ),
+                    span: self.span_from_current(),
+                },
+                ParseError::InvalidSyntax { message, .. } => ParseError::InvalidSyntax {
+                    message: format!("Invalid interpolated expression '{}': {}", expr_str, message),
+                    span: self.span_from_current(),
+                },
+                other => other, // Preserve other error types as-is
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::*;
+    use crate::ast::StringPart;
+
+    fn parse_expression(input: &str) -> ParseResult<Expr> {
+        let mut lexer = Lexer::new(input.to_string(), "test".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens, "test".to_string());
+        parser.parse_expression()
+    }
+    
+    fn parse_statement(input: &str) -> ParseResult<Stmt> {
+        let mut lexer = Lexer::new(input.to_string(), "test".to_string());
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens, "test".to_string());
+        parser.parse_statement()
+    }
+    
+    #[test]
+    fn test_literal_expressions() {
+        let expr = parse_expression("42").unwrap();
+        assert!(matches!(expr.kind, ExprKind::Literal(Literal::Integer(42))));
+        
+        let expr = parse_expression("3.14").unwrap();
+        assert!(matches!(expr.kind, ExprKind::Literal(Literal::Float(f)) if (f - 3.14).abs() < f64::EPSILON));
+        
+        let expr = parse_expression("true").unwrap();
+        assert!(matches!(expr.kind, ExprKind::Literal(Literal::Bool(true))));
+        
+        let expr = parse_expression("\"hello\"").unwrap();
+        assert!(matches!(expr.kind, ExprKind::Literal(Literal::String(ref s)) if s == "hello"));
+    }
+    
+    #[test]
+    fn test_binary_expressions() {
+        let expr = parse_expression("1 + 2").unwrap();
+        if let ExprKind::Binary { op, .. } = expr.kind {
+            assert_eq!(op, BinaryOp::Add);
+        } else {
+            panic!("Expected binary expression");
+        }
+        
+        let expr = parse_expression("a == b").unwrap();
+        if let ExprKind::Binary { op, .. } = expr.kind {
+            assert_eq!(op, BinaryOp::Eq);
+        } else {
+            panic!("Expected binary expression");
+        }
+    }
+    
+    #[test]
+    fn test_function_call() {
+        let expr = parse_expression("foo(1, 2, 3)").unwrap();
+        if let ExprKind::Call { args, .. } = expr.kind {
+            assert_eq!(args.len(), 3);
+        } else {
+            panic!("Expected function call");
+        }
+    }
+    
+    #[test]
+    fn test_assignment_statement() {
+        let stmt = parse_statement("x is 42").unwrap();
+        if let StmtKind::Assignment { target, value } = stmt.kind {
+            assert!(matches!(target.kind, ExprKind::Identifier(ref s) if s == "x"));
+            assert!(matches!(value.kind, ExprKind::Literal(Literal::Integer(42))));
+        } else {
+            panic!("Expected assignment statement");
+        }
+    }
+    
+    #[test]
+    fn test_function_definition() {
+        // Test indentation-based function syntax without colons
+        let code = r#"fn add(a: i32, b: i32) -> i32
+    return a + b"#;
+        let stmt = parse_statement(code).unwrap();
+        if let StmtKind::Function { name, params, return_type, .. } = stmt.kind {
+            assert_eq!(name, "add");
+            assert_eq!(params.len(), 2);
+            assert_eq!(params[0].name, "a");
+            assert_eq!(params[1].name, "b");
+            assert!(matches!(return_type, Some(Type::I32)));
+        } else {
+            panic!("Expected function definition");
+        }
+    }
+    
+    #[test]
+    fn test_assignment_with_is() {
+        let stmt = parse_statement("foo is 99").unwrap();
+        if let StmtKind::Assignment { target, value } = stmt.kind {
+            assert!(matches!(target.kind, ExprKind::Identifier(ref s) if s == "foo"));
+            assert!(matches!(value.kind, ExprKind::Literal(Literal::Integer(99))));
+        } else {
+            panic!("Expected assignment statement");
+        }
+    }
+
+    #[test]
+    fn test_assignment_with_equal() {
+        let stmt = parse_statement("bar = 7").unwrap();
+        if let StmtKind::Assignment { target, value } = stmt.kind {
+            assert!(matches!(target.kind, ExprKind::Identifier(ref s) if s == "bar"));
+            assert!(matches!(value.kind, ExprKind::Literal(Literal::Integer(7))));
+        } else {
+            panic!("Expected assignment statement");
+        }
+    }
+
+    #[test]
+    fn test_assignment_with_is_and_expression() {
+        let stmt = parse_statement("result is 1 + 2 * 3").unwrap();
+        if let StmtKind::Assignment { target, value } = stmt.kind {
+            assert!(matches!(target.kind, ExprKind::Identifier(ref s) if s == "result"));
+            // Should parse as binary expression
+            if let ExprKind::Binary { op, .. } = value.kind {
+                assert_eq!(op, BinaryOp::Add);
+            } else {
+                panic!("Expected binary expression");
+            }
+        } else {
+            panic!("Expected assignment statement");
+        }
+    }
+
+    #[test]
+    fn test_string_interpolation() {
+        let expr = parse_expression("'hello {name}'").unwrap();
+        if let ExprKind::StringInterpolation { parts } = &expr.kind {
+            assert_eq!(parts.len(), 3);
+            
+            if let crate::ast::StringPart::Literal(s) = &parts[0] {
+                assert_eq!(s, "hello ");
+            } else {
+                panic!("Expected literal part");
+            }
+            
+            if let crate::ast::StringPart::Expression(expr) = &parts[1] {
+                if let ExprKind::Identifier(name) = &expr.kind {
+                    assert_eq!(name, "name");
+                } else {
+                    panic!("Expected identifier expression");
+                }
+            } else {
+                panic!("Expected expression part");
+            }
+            
+            if let crate::ast::StringPart::Literal(s) = &parts[2] {
+                assert_eq!(s, "");
+            } else {
+                panic!("Expected literal part");
+            }
+        } else {
+            panic!("Expected string interpolation");
+        }
+    }
+    
+    #[test]
+    fn test_nested_string_interpolation() {
+        let expr = parse_expression("\"Value: {condition ? 'Yes' ! 'No'}\"").unwrap();
+        if let ExprKind::StringInterpolation { parts } = expr.kind {
+            assert_eq!(parts.len(), 3);
+            assert!(matches!(parts[0], StringPart::Literal(ref s) if s == "Value: "));
+            assert!(matches!(parts[1], StringPart::Expression(_)));
+            assert!(matches!(parts[2], StringPart::Literal(ref s) if s == ""));
+        } else {
+            panic!("Expected string interpolation expression");
+        }
+    }
+    
+    #[test]
+    fn test_string_interpolation_with_escaped_braces() {
+        let expr = parse_expression("\"Value: {{value}}\"").unwrap();
+        if let ExprKind::StringInterpolation { parts } = &expr.kind {
+            assert_eq!(parts.len(), 1);
+            assert!(matches!(parts[0], StringPart::Literal(ref s) if s == "Value: {value}"));
+        } else {
+            panic!("Expected string interpolation expression");
+        }
+    }
+}
+
+[[[src/semantic.rs]]]
+use crate::ast::*;
+use std::collections::HashMap;
+
+/// Symbol table for tracking variable and function declarations
+#[derive(Debug, Clone)]
+pub struct SymbolTable {
+    scopes: Vec<HashMap<String, Symbol>>,
+}
+
+/// Symbol information
+#[derive(Debug, Clone)]
+pub struct Symbol {
+    pub name: String,
+    pub type_: Type,
+    pub kind: SymbolKind,
+    pub span: SourceSpan,
+}
+
+#[derive(Debug, Clone)]
+pub enum SymbolKind {
+    Variable,
+    Function {
+        params: Vec<Type>,
+        return_type: Type,
+    },
+    Type,
+}
+
+impl SymbolTable {
+    pub fn new() -> Self {
+        Self {
+            scopes: vec![HashMap::new()], // Start with global scope
+        }
+    }
+    
+    pub fn enter_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+    
+    pub fn exit_scope(&mut self) {
+        self.scopes.pop();
+    }
+    
+    pub fn define(&mut self, symbol: Symbol) -> Result<(), String> {
+        let current_scope = self.scopes.last_mut().unwrap();
+        
+        if current_scope.contains_key(&symbol.name) {
+            return Err(format!("Symbol '{}' already defined in this scope", symbol.name));
+        }
+        
+        current_scope.insert(symbol.name.clone(), symbol);
+        Ok(())
+    }
+    
+    pub fn lookup(&self, name: &str) -> Option<&Symbol> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(symbol) = scope.get(name) {
+                return Some(symbol);
+            }
+        }
+        None
+    }
+}
+
+/// Semantic analyzer for type checking and other semantic validations
+pub struct SemanticAnalyzer {
+    symbol_table: SymbolTable,
+    errors: Vec<SemanticError>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SemanticError {
+    pub message: String,
+    pub span: SourceSpan,
+}
+
+impl SemanticAnalyzer {
+    pub fn new() -> Self {
+        Self {
+            symbol_table: SymbolTable::new(),
+            errors: Vec::new(),
+        }
+    }
+    
+    pub fn analyze(&mut self, program: &mut Program) -> Result<(), Vec<SemanticError>> {
+        self.visit_program(program);
+        
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(self.errors.clone())
+        }
+    }
+    
+    fn visit_program(&mut self, program: &mut Program) {
+        for stmt in &mut program.statements {
+            self.visit_stmt(stmt);
+        }
+    }
+    
+    fn visit_stmt(&mut self, stmt: &mut Stmt) {
+        match &mut stmt.kind {
+            StmtKind::Function { name, params, return_type, body } => {
+                let param_types: Vec<Type> = params.iter().map(|p| p.type_.clone()).collect();
+                let ret_type = return_type.clone().unwrap_or(Type::Unit);
+                
+                let symbol = Symbol {
+                    name: name.clone(),
+                    type_: Type::Function {
+                        params: param_types.clone(),
+                        return_type: Box::new(ret_type.clone()),
+                    },
+                    kind: SymbolKind::Function {
+                        params: param_types,
+                        return_type: ret_type,
+                    },
+                    span: stmt.span.clone(),
+                };
+                
+                if let Err(err) = self.symbol_table.define(symbol) {
+                    self.error(err, stmt.span.clone());
+                }
+                
+                // Enter function scope
+                self.symbol_table.enter_scope();
+                
+                // Add parameters to scope
+                for param in params {
+                    let param_symbol = Symbol {
+                        name: param.name.clone(),
+                        type_: param.type_.clone(),
+                        kind: SymbolKind::Variable,
+                        span: param.span.clone(),
+                    };
+                    
+                    if let Err(err) = self.symbol_table.define(param_symbol) {
+                        self.error(err, param.span.clone());
+                    }
+                }
+                
+                // Analyze function body
+                for body_stmt in body {
+                    self.visit_stmt(body_stmt);
+                }
+                
+                self.symbol_table.exit_scope();
+            }
+            
+            StmtKind::If { condition, then_branch, else_branch } => {
+                let cond_type = self.visit_expr(condition);
+                if cond_type != Type::Bool {
+                    self.error(format!(
+                        "If condition must be boolean, found {:?}",
+                        cond_type
+                    ), condition.span.clone());
+                }
+                
+                self.symbol_table.enter_scope();
+                for stmt in then_branch {
+                    self.visit_stmt(stmt);
+                }
+                self.symbol_table.exit_scope();
+                
+                if let Some(else_stmts) = else_branch {
+                    self.symbol_table.enter_scope();
+                    for stmt in else_stmts {
+                        self.visit_stmt(stmt);
+                    }
+                    self.symbol_table.exit_scope();
+                }
+            }
+            
+            StmtKind::While { condition, body } => {
+                let cond_type = self.visit_expr(condition);
+                if cond_type != Type::Bool {
+                    self.error(format!(
+                        "While condition must be boolean, found {:?}",
+                        cond_type
+                    ), condition.span.clone());
+                }
+                
+                self.symbol_table.enter_scope();
+                for stmt in body {
+                    self.visit_stmt(stmt);
+                }
+                self.symbol_table.exit_scope();
+            }
+            
+            StmtKind::Unless { condition, body } => {
+                let cond_type = self.visit_expr(condition);
+                if cond_type != Type::Bool {
+                    self.error(format!(
+                        "Unless condition must be boolean, found {:?}",
+                        cond_type
+                    ), condition.span.clone());
+                }
+                
+                self.symbol_table.enter_scope();
+                for stmt in body {
+                    self.visit_stmt(stmt);
+                }
+                self.symbol_table.exit_scope();
+            }
+            
+            StmtKind::Until { condition, body } => {
+                let cond_type = self.visit_expr(condition);
+                if cond_type != Type::Bool {
+                    self.error(format!(
+                        "Until condition must be boolean, found {:?}",
+                        cond_type
+                    ), condition.span.clone());
+                }
+                
+                self.symbol_table.enter_scope();
+                for stmt in body {
+                    self.visit_stmt(stmt);
+                }
+                self.symbol_table.exit_scope();
+            }
+            
+            StmtKind::For { variable, iterable, body } => {
+                let iterable_type = self.visit_expr(iterable);
+                
+                // Determine element type from iterable
+                let element_type = match &iterable_type {
+                    Type::List(elem_type) => *elem_type.clone(),
+                    Type::String => Type::String, // Characters
+                    _ => {
+                        self.error(format!(
+                            "Cannot iterate over type {:?}",
+                            iterable_type
+                        ), iterable.span.clone());
+                        Type::Unknown
+                    }
+                };
+                
+                self.symbol_table.enter_scope();
+                
+                // Define loop variable
+                let loop_var_symbol = Symbol {
+                    name: variable.clone(),
+                    type_: element_type,
+                    kind: SymbolKind::Variable,
+                    span: stmt.span.clone(),
+                };
+                
+                if let Err(err) = self.symbol_table.define(loop_var_symbol) {
+                    self.error(err, stmt.span.clone());
+                }
+                
+                for stmt in body {
+                    self.visit_stmt(stmt);
+                }
+                self.symbol_table.exit_scope();
+            }
+            
+            StmtKind::Iterate { iterable, body } => {
+                let iterable_type = self.visit_expr(iterable);
+                
+                // Determine element type and verify iterability
+                let element_type = match &iterable_type {
+                    Type::List(elem_type) => *elem_type.clone(),
+                    Type::String => Type::String, // Or Type::Char if you add one
+                    _ => {
+                        self.error(format!(
+                            "Cannot iterate over type {:?}",
+                            iterable_type
+                        ), iterable.span.clone());
+                        Type::Unknown
+                    }
+                };
+                
+                self.symbol_table.enter_scope();
+                
+                // Define $ symbol in the iterate scope
+                let dollar_symbol = Symbol {
+                    name: "$".to_string(),
+                    type_: element_type,
+                    kind: SymbolKind::Variable,
+                    span: iterable.span.clone(),
+                };
+                
+                if let Err(err) = self.symbol_table.define(dollar_symbol) {
+                    self.error(err, iterable.span.clone());
+                }
+                
+                for stmt in body {
+                    self.visit_stmt(stmt);
+                }
+                self.symbol_table.exit_scope();
+            }
+            
+            StmtKind::Assignment { target, value } => {
+                let value_type = self.visit_expr(value);
+                
+                // Check if this is a variable assignment
+                if let ExprKind::Identifier(name) = &target.kind {
+                    // Check if variable already exists
+                    if let Some(_) = self.symbol_table.lookup(name) {
+                        // Variable exists, check type compatibility
+                        let target_type = self.visit_expr(target);
+                        if !self.types_compatible(&value_type, &target_type) {
+                            self.error(format!(
+                                "Assignment type mismatch: cannot assign {:?} to {:?}",
+                                value_type, target_type
+                            ), stmt.span.clone());
+                        }
+                    } else {
+                        // Variable doesn't exist, declare it with the value's type
+                        let symbol = Symbol {
+                            name: name.clone(),
+                            type_: value_type.clone(),
+                            kind: SymbolKind::Variable,
+                            span: target.span.clone(),
+                        };
+                        
+                        if let Err(err) = self.symbol_table.define(symbol) {
+                            self.error(err, stmt.span.clone());
+                        }
+                    }
+                } else {
+                    // For other types of targets (field access, indexing), just type check
+                    let target_type = self.visit_expr(target);
+                    if !self.types_compatible(&value_type, &target_type) {
+                        self.error(format!(
+                            "Assignment type mismatch: cannot assign {:?} to {:?}",
+                            value_type, target_type
+                        ), stmt.span.clone());
+                    }
+                }
+            }
+            
+            StmtKind::Return(expr) => {
+                if let Some(expr) = expr {
+                    self.visit_expr(expr);
+                }
+            }
+            
+            StmtKind::Expression(expr) => {
+                self.visit_expr(expr);
+            }
+            
+            _ => {
+                // Handle other statement types
+            }
+        }
+    }
+    
+    fn visit_expr(&mut self, expr: &mut Expr) -> Type {
+        let inferred_type = match &mut expr.kind {
+            ExprKind::Literal(lit) => self.literal_type(lit),
+            
+            ExprKind::Identifier(name) => {
+                if let Some(symbol) = self.symbol_table.lookup(name) {
+                    symbol.type_.clone()
+                } else {
+                    self.error(format!("Undefined variable: {}", name), expr.span.clone());
+                    Type::Unknown
+                }
+            }
+            
+            ExprKind::Binary { op, left, right } => {
+                let left_type = self.visit_expr(left);
+                let right_type = self.visit_expr(right);
+                self.binary_result_type(op, &left_type, &right_type, &expr.span)
+            }
+            
+            ExprKind::Unary { op, operand } => {
+                let operand_type = self.visit_expr(operand);
+                self.unary_result_type(op, &operand_type, &expr.span)
+            }
+            
+            ExprKind::Call { callee, args } => {
+                let callee_type = self.visit_expr(callee);
+                let arg_types: Vec<Type> = args.iter_mut().map(|arg| self.visit_expr(arg)).collect();
+                
+                match callee_type {
+                    Type::Function { params, return_type } => {
+                        if params.len() != arg_types.len() {
+                            self.error(format!(
+                                "Function call argument count mismatch: expected {}, found {}",
+                                params.len(), arg_types.len()
+                            ), expr.span.clone());
+                        } else {
+                            for (param_type, arg_type) in params.iter().zip(arg_types.iter()) {
+                                if !self.types_compatible(arg_type, param_type) {
+                                    self.error(format!(
+                                        "Function call argument type mismatch: expected {:?}, found {:?}",
+                                        param_type, arg_type
+                                    ), expr.span.clone());
+                                }
+                            }
+                        }
+                        *return_type
+                    }
+                    _ => {
+                        self.error(format!(
+                            "Cannot call non-function type: {:?}",
+                            callee_type
+                        ), expr.span.clone());
+                        Type::Unknown
+                    }
+                }
+            }
+            
+            ExprKind::If { condition, then_branch, else_branch } => {
+                let cond_type = self.visit_expr(condition);
+                if cond_type != Type::Bool {
+                    self.error(format!(
+                        "If condition must be boolean, found {:?}",
+                        cond_type
+                    ), condition.span.clone());
+                }
+                
+                let then_type = self.visit_expr(then_branch);
+                
+                if let Some(else_expr) = else_branch {
+                    let else_type = self.visit_expr(else_expr);
+                    if !self.types_compatible(&then_type, &else_type) {
+                        self.error(format!(
+                            "If branch type mismatch: then branch is {:?}, else branch is {:?}",
+                            then_type, else_type
+                        ), expr.span.clone());
+                    }
+                }
+                
+                then_type
+            }
+            
+            ExprKind::Block(stmts) => {
+                self.symbol_table.enter_scope();
+                
+                let mut last_type = Type::Unit;
+                for stmt in stmts {
+                    self.visit_stmt(stmt);
+                    
+                    // If the last statement is an expression, use its type
+                    if let StmtKind::Expression(expr) = &stmt.kind {
+                        last_type = expr.type_.clone();
+                    }
+                }
+                
+                self.symbol_table.exit_scope();
+                last_type
+            }
+            
+            ExprKind::StringInterpolation { parts } => {
+                // Visit all expression parts to type check them
+                for part in parts {
+                    if let crate::ast::StringPart::Expression(expr) = part {
+                        self.visit_expr(expr);
+                    }
+                }
+                Type::String
+            }
+            
+            _ => Type::Unknown,
+        };
+        
+        // Update the expression's type
+        expr.type_ = inferred_type.clone();
+        inferred_type
+    }
+    
+    fn literal_type(&self, lit: &Literal) -> Type {
+        match lit {
+            Literal::Integer(_) => Type::I32, // Default to i32
+            Literal::Float(_) => Type::F64,   // Default to f64
+            Literal::String(_) => Type::String,
+            Literal::Bool(_) => Type::Bool,
+            Literal::Unit => Type::Unit,
+            // Coral-specific literals
+            Literal::No => Type::Unit,        // `no` represents null/none
+            Literal::Empty => Type::List(Box::new(Type::Unknown)), // Empty collection
+            Literal::Now => Type::I64,        // Timestamp as i64
+        }
+    }
+    
+    fn binary_result_type(&mut self, op: &BinaryOp, left: &Type, right: &Type, span: &SourceSpan) -> Type {
+        match op {
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+                if left.is_numeric() && right.is_numeric() {
+                    if left.is_float() || right.is_float() {
+                        Type::F64 // Promote to floating point
+                    } else {
+                        Type::I32 // Default integer type
+                    }
+                } else {
+                    self.error(format!(
+                        "Arithmetic operation requires numeric types, found {:?} and {:?}",
+                        left, right
+                    ), span.clone());
+                    Type::Unknown
+                }
+            }
+            
+            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+                if self.types_compatible(left, right) {
+                    Type::Bool
+                } else {
+                    self.error(format!(
+                        "Comparison requires compatible types, found {:?} and {:?}",
+                        left, right
+                    ), span.clone());
+                    Type::Bool
+                }
+            }
+            
+            BinaryOp::And | BinaryOp::Or => {
+                if *left == Type::Bool && *right == Type::Bool {
+                    Type::Bool
+                } else {
+                    self.error(format!(
+                        "Logical operation requires boolean types, found {:?} and {:?}",
+                        left, right
+                    ), span.clone());
+                    Type::Bool
+                }
+            }
+            
+            _ => Type::Unknown,
+        }
+    }
+    
+    fn unary_result_type(&mut self, op: &UnaryOp, operand: &Type, span: &SourceSpan) -> Type {
+        match op {
+            UnaryOp::Not => {
+                if *operand == Type::Bool {
+                    Type::Bool
+                } else {
+                    self.error(format!(
+                        "Logical not requires boolean type, found {:?}",
+                        operand
+                    ), span.clone());
+                    Type::Bool
+                }
+            }
+            
+            UnaryOp::Neg => {
+                if operand.is_numeric() {
+                    operand.clone()
+                } else {
+                    self.error(format!(
+                        "Numeric negation requires numeric type, found {:?}",
+                        operand
+                    ), span.clone());
+                    Type::Unknown
+                }
+            }
+            
+            UnaryOp::BitNot => {
+                if operand.is_integer() {
+                    operand.clone()
+                } else {
+                    self.error(format!(
+                        "Bitwise not requires integer type, found {:?}",
+                        operand
+                    ), span.clone());
+                    Type::Unknown
+                }
+            }
+        }
+    }
+    
+    fn types_compatible(&self, actual: &Type, expected: &Type) -> bool {
+        match (actual, expected) {
+            (Type::Unknown, _) | (_, Type::Unknown) => true,
+            (a, b) if a == b => true,
+            (Type::I8, Type::I16) | (Type::I8, Type::I32) | (Type::I8, Type::I64) => true,
+            (Type::I16, Type::I32) | (Type::I16, Type::I64) => true,
+            (Type::I32, Type::I64) => true,
+            (Type::F32, Type::F64) => true,
+            _ => false,
+        }
+    }
+    
+    fn error(&mut self, message: String, span: SourceSpan) {
+        self.errors.push(SemanticError { message, span });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_variable_analysis() {
+        let mut analyzer = SemanticAnalyzer::new();
+        
+        let mut program = Program {
+            statements: vec![
+                Stmt::new(
+                    SourceSpan::default(),
+                    StmtKind::Assignment {
+                        target: Expr::new(
+                            SourceSpan::default(),
+                            ExprKind::Identifier("x".to_string())
+                        ),
+                        value: Expr::new(
+                            SourceSpan::default(),
+                            ExprKind::Literal(Literal::Integer(42))
+                        ),
+                    }
+                )
+            ],
+            span: SourceSpan::default(),
+        };
+        
+        let result = analyzer.analyze(&mut program);
+        assert!(result.is_ok());
+    }
+}
+

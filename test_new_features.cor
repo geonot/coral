@@ -1,0 +1,18 @@
+binary_value is b101
+hex_value is 0xFF
+
+status is age.gt(18) ? 'adult' ! 'minor'
+
+primes is (2, 3, 5, 7, 11)
+empty_list is ()
+
+config is (host: 'localhost', port: 8080)
+
+unless logged_in:
+    redirect_to_login()
+
+until queue.is_empty:
+    process_item(queue.pop())
+
+iterate users:
+    send_notification($)

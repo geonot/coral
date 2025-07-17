@@ -1,161 +1,260 @@
-store task
-    description
-    priority ? 1
-    complete ? false
+// Coral Syntax Examples
 
-    make
-        return log create
-            $description
-            $priority
-            $complete
-
-    complete
-        id ? $id
-        return log update $id complete true
-
-task1 is task with description 'Implement command-oriented persistence'
-task2 is task with description 'Write documentation'
-
-task1.complete
-task.complete(2)
-
-
+// Assignment - bidirectional
 message is 'hello coral'
 ITERATIONS is 100
 threshold is 0.95
-SYSTEM_ACTIVE is true
 PI is 3.1415926535
 
-calculate_value 10, 20 
-process_further result
+// Reverse assignment
+3.1415926535 is PI
+0.95 is threshold
+100 is ITERATIONS
+'hello coral' is message
 
-primes is [2, 3, 5, 7, 11]
-pending_tasks is []
-pending_tasks add 'todo 1'
-first_prime is primes at 0
+// Literals
+m is 'hello {name}'
+n is "string literal"
+x is 10
+y is 1.0
+z is true
+a is no
+b is empty
+c is 0x0F
+d is b101
+e is now
 
-net_config is {}
-net_config.host is 'localhost'
-net_config.port is 5000
+// Lists
+primes is (2, 3, 5, 7, 11)
+first_prime is primes(0)
+second_prime is primes(1)
+primes.put 13
+item is primes.pop
+count is primes.size
+is_empty is primes.empty
 
-fn greet with name, greeting 'Hello'
-    '{greeting}, {name}. Welcome to Coral.'
+// Maps
+net_config is
+    host is 'localhost'
+    port is 5000
 
-fn compute_total with price, quantity, tax_rate 0.07
+netconfig is (host: 'localhost', port: 5000)
+
+// Functions with default params
+fn greet(name, greeting 'hello')  
+    '{greeting}, {name}.'
+
+fn compute_total(price, quantity, tax_rate: 0.07)
     sub_total is price * quantity
     sub_total + (sub_total * tax_rate)
 
-greet 'Expert'
-greet 'Dr. Coral', 'Salutations'
+greet('brandon')
+greet('brandon', 'yo')
 
-order_value is compute_total 100, 3
+order_value is compute_total(100, 3)
+order_custom_tax is compute_total(price: 100, quantity: 5, tax_rate: 0.05)
 
-order_custom_tax is compute_total
-    price 100, quantity 3, tax_rate 0.1
+// Dollar param shortcuts
+fn log_kv
+    log '$0: $1'
 
-status_text is system_status at load_average gt 0.9 ? 'High Load' ! 'Normal Load'
+fn log_kv_named
+    log '{$key}: {$value}'
 
-iterate system_status.active_nodes check_health $
+log_kv 'key', 'value'
+log_kv_named key: 'key', value: 'value'
 
-check_health across system_status.active_nodes
-check_health across system_status.active_nodes into node_status 
-check_health across system_status.active_nodes with host 'localhost' into node_status
+// Conditionals
+status_text is
+    system_status.load_average.gt(0.9) ? 
+        'High Load' ! 'Normal Load'
 
-while iterator lt 3
+unless x.equals 0
+    process x
+
+process x unless x.equals 0
+
+// Comparison examples
+result is x.equals y
+greater is x.gt 10
+less is x.lt 5
+gte_check is x.gte threshold
+lte_check is x.lte 100
+
+// Loops
+while iterator.lt(3)
     log 'iterator is {iterator}'
- 
-until iterator from 2 by 2 equals 8
+
+until iterator.from(0).by(2).equals(8)
     log 'iterator is {iterator}'
 
-unless x equals 0 process x
-process x unless x equals 0
+iterate system_status.active_nodes
+     log check_health $
 
-config is load 'coral.json'
-load 'coral.json' as config
+check_health.across(system_status.active_nodes)
+check_health.across(system_status.active_nodes).into(node_status)
+check_health.across(system_status.active_nodes)
+    .with(host: 'localhost', timeout: 5000)
+    .into(node_status)
 
-record is user with name 'root'
+// Error handling
+calculate_value(10, 20) 
+    err log return
 
-brandon is user 'brandon', 'brandon@email.com', 'password'
+process_further(result) 
+    err log return
 
+config is load('coral.json') err {}
+load('coral.json') is config
+
+record is user.with('name', 'root')
+    err return log err
+
+// String and numeric comparisons
+name_match is username.equals 'admin'
+threshold_check is value.gt 0.95
+range_check is count.gte 1 and count.lte 100
+string_compare is message.equals 'hello coral'
+
+// Objects
 object datapoint
-    value     
-    processed ? no      
+    value
+    processed ? no
     timestamp ? now
 
-    process
+d1 is datapoint.make 42
+d2 is datapoint.make 100, yes
+d3 is datapoint.make 100, yes, some_time
+
+object task
+    definition
+    processed ? no
+    timestamp ? now
+
+    complete
         processed is yes
-        
-d1 is datapoint with value 42
-d2 is datapoint with value 100
 
-d1.process!
-d2.process!
+task1 is task.make 'do the dishes'
+task1.complete
 
-store task
-    description
-    priority ? 1
-    complete ? false
+task.complete 1
+task.complete task1
+                   
+my_list.push(item).process.save
 
-    set_complete
-        id ? $0 
-        update id complete true
+// Task comparison examples  
+task_done is task1.processed.equals yes
+task_priority_check is task1.priority.gt 1
 
-    get_summary
-        status is complete ? 'Done' ! 'Pending'
-        'task {id} (P{priority}) - {status}: {description}'
-
-log hash.blake3 'hello'
-
-store message
-    sender
-    recipient
-    subject ? empty
-    body ? empty
-    timestamp ? now
-    acknowledged ? no
-
-    as_string 
-        'message:{id} from {sender} to {recipient}'
-        'at {timestamp} (ack: {acknowledged})'
-        'subject: {subject}'
-        'body: {body}'
-    
-    as_map
-        'id' is id
-        'sender' is sender.id
-        'recipient' is recipient.id
-        'subject' is subject
-        'body' is body
-        'timestamp' is timestamp
-        'acknowledged' is acknowledged
-        
-    as_list
-        id, sender.id, recipient.id, 
-        subject, body, timestamp, 
-        acknowledged
-
-store actor user
-    name
-    email
+object user
+    username
     password
-    &blocklist
-    &messages
 
     make
         password is hash.blake3 $password
 
-    send
-        recipient is user with $id
-        recipient.receive $message
-
     authenticate
-        pwd_hash is hash.blake3 $password
-        pwd_hash equals password
+        password.equals hash.blake3 $password
         
-    check_blocked
-        id from user with username $username in blocklist
+user1 is user.make 'brandon', 'password1'
 
-    @receive
-        check_blocked log return
+fn auth_user
+    $.authenticate 'password2'
 
-x is 'ok'
+valid is auth_user user1
+
+// Object comparison methods
+user_match is user1.equals user2
+user_valid is user1.authenticate.equals true
+
+// Persistent Objects
+store message
+    sender, recipient, subject, body
+    timestamp ? now
+    acknowledged ? no
+
+    as string 
+        'message:{id} from {sender} to {recipient}'
+        'at {timestamp} (ack: {acknowledged})'
+        'subject: {subject}'
+        '{body}'
+        
+    as map     
+        id is id 
+        sender is sender.id 
+        recipient is recipient.id
+        subject is subject
+        body is body
+        
+    as list
+        id, sender.id, recipient.id, 
+        subject, body, timestamp
+
+store task
+    description
+    priority ? 1
+    complete ? no
+
+    is_done
+        id ? $id  
+        return complete.equals yes
+
+task1 is task.make 'Do coding'
+task2 is task.make 'Write documentation', 2
+
+task1 make task 'do coding, '           
+
+message_map is message1 as map
+
+task_completed is task.is_done 1
+task_completed is task.with_id(1).is_done
+
+// Store object comparisons
+task_match is task1.description.equals 'Do coding'
+message_ack is message1.acknowledged.equals yes
+
+store message for user
+    ...
+
+store blocklist for user
+    blocked_user
+
+// Actor Objects
+store actor user
+    name
+    email
+    password 
+    &blocklist
+    &message
+
+    make
+        password is hash.blake3 $password
+
+store actor user
+
+    @receive 
+        check_blocked log return 
+
+store actor task_processor
+
+    process_next_task
+        ...
+
+    @receive_task 
+        task is task.make $description, $priority
+        push task on pending_tasks
+        process_next_task!
+
+// Modules
+use coral.net.web
+
+get('https://somesite.com')
+
+mod xyz
+
+fn abc
+    ...
+
+use xyz
+
+x is abc 123

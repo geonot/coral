@@ -1,7 +1,0 @@
-# Simple Coral test file
-message is 'Hello Coral!'
-x is 10
-y is 20
-result is x + y
-log message
-log result

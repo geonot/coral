@@ -1,226 +1,161 @@
-program = { statement } ;
+coral_script = { top_level_statement } , EOF ;
+
+top_level_statement = definition | statement ;
+
+definition = function_definition | object_definition | store_definition | actor_definition | module_definition ;
 
 statement = assignment
-          | function_definition
-          | object_definition
-          | store_definition
-          | actor_definition
-          | method_call_statement
-          | function_call_statement
-          | control_flow_statement
-          | error_handling_statement
-          | use_statement
           | expression_statement
-          | comment ;
+          | conditional_statement
+          | loop_statement
+          | use_statement
+          | return_statement
+          | break_statement
+          | continue_statement
+          | log_statement
+          | empty_statement
+          ;
 
-(* Comments *)
-comment = single_comment | doc_comment ;
-single_comment = "#" { any_character_except_newline } newline ;
-doc_comment = "##" { any_character_except_newline } newline ;
+empty_statement = NEWLINE ;
+break_statement = 'break' ;
+continue_statement = 'continue' ;
+log_statement = 'log' , expression ;
 
-(* Basic assignment *)
-assignment = identifier "is" expression ;
+assignment = assignable_target , 'is' , ( expression | map_block_assignment_rhs )
+            | ( expression | map_block_assignment_rhs ) , 'is' , assignable_target ;
 
-(* Expressions *)
-expression = ternary_expression ;
+assignable_target = primary_expression_base , { property_access_suffix | list_element_access_suffix } ;
 
-ternary_expression = logical_or_expression [ "?" expression "!" expression ] ;
+expression_statement = full_expression ;
 
-logical_or_expression = logical_and_expression { ( "or" | "||" ) logical_and_expression } ;
+return_statement = 'return' , [ expression ] ;
 
-logical_and_expression = equality_expression { ( "and" | "&&" ) equality_expression } ;
+full_expression = expression , { error_handler_suffix } ;
 
-equality_expression = comparison_expression { ( "==" | "!=" | "equals" ) comparison_expression } ;
+error_handler_suffix = 'err' , error_action ;
+error_action = ( 'return' , [ expression ] ) | expression | statement_or_block ;    
 
-comparison_expression = additive_expression { ( "gt" | "lt" | "gte" | "lte" | ">=" | "<=" ) additive_expression } ;
+expression = ternary_conditional_expression ;
 
-additive_expression = multiplicative_expression { ( "+" | "-" ) multiplicative_expression } ;
+ternary_conditional_expression = logical_or_expression , [ '?' , expression , '!' , expression ] ;
 
-multiplicative_expression = power_expression { ( "*" | "/" | "%" ) power_expression } ;
+logical_or_expression = logical_and_expression , { 'or' , logical_and_expression } ;
 
-power_expression = unary_expression [ "**" power_expression ] ;
+logical_and_expression = comparison_expression , { 'and' , comparison_expression } ;
 
-unary_expression = ( "!" | "-" | "~" ) unary_expression | postfix_expression ;
+comparison_expression = additive_expression , { ( '=' | 'equals' | '>' | '>=' | '<' | '<=' | 'gt' | 'gte' | 'lt' | 'lte' ) , additive_expression } ;
 
-postfix_expression = primary_expression { postfix_operator } ;
+additive_expression = multiplicative_expression , { ( '+' | '-' ) , multiplicative_expression } ;
 
-postfix_operator = method_call
-                 | array_access
-                 | as_conversion
-                 | error_handling ;
+multiplicative_expression = unary_expression , { ( '*' | '/' | '%' ) , unary_expression } ;
 
-primary_expression = literal
-                   | identifier
-                   | parameter_reference
-                   | array_literal
-                   | object_literal
-                   | parenthesized_expression
-                   | instantiation
-                   | function_call
-                   | built_in_operation ;
+unary_expression = [ '-' | 'not' ] , value_or_invocation ;
+postfix_bang_suffix = '!' ;
 
-(* Literals *)
-literal = string_literal | number_literal | boolean_literal | empty_literal | now_literal ;
+// A primary expression followed by any mix of property accesses, list accesses, calls, or bangs
+value_or_invocation = primary_expression_base , { postfix_operation }* ;
 
-string_literal = single_quote_string | double_quote_string ;
-single_quote_string = "'" { string_char | interpolation } "'" ;
-double_quote_string = '"' { string_char | interpolation | newline } '"' ;
-interpolation = "{" expression "}" ;
+postfix_operation = property_access_suffix 
+                  | list_element_access_suffix 
+                  | call_operation 
+                  | postfix_bang_suffix ;
 
-number_literal = integer | float ;
-integer = digit { digit } ;
-float = digit { digit } "." digit { digit } ;
+primary_expression_base = IDENTIFIER
+                        | literal
+                        | parameter_reference
+                        | list_literal
+                        | map_literal
+                        | string_interpolation
+                        | '(' , expression , ')'
+                        ;
 
-boolean_literal = "yes" | "no" | "true" | "false" ;
+parameter_reference = '$' , [ IDENTIFIER | INTEGER_LITERAL ] ;
 
-array_literal = "[" [ expression { "," expression } ] "]" ;
+property_access_suffix = '.' , IDENTIFIER ;
+list_element_access_suffix = '[' , expression , ']' ;
+call_operation = '(' , [ argument_list ] , ')' ;
+postfix_bang_suffix = '!' ;
 
-empty_literal = "empty" | "[]" ;
-now_literal = "now" ;
+argument_list = argument , { ',' , argument } ;
+argument = [ IDENTIFIER , ':' ] , expression ;
 
-(* Object literals *)
-object_literal = property_assignment { property_assignment } ;
-property_assignment = identifier "is" expression ;
+literal = STRING_LITERAL | INTEGER_LITERAL | FLOAT_LITERAL | boolean_literal | 'empty' | 'now' ;
+boolean_literal = 'true' | 'false' | 'yes' | 'no' ;
 
-(* Identifiers and references *)
-identifier = letter { letter | digit | "_" } ;
-parameter_reference = "$" ( identifier | integer | "$" ) ;
+list_literal = '(' , [ expression , { ',' , expression } , [ ',' ] ] , ')' ;
+map_literal = '(' , [ map_entry , { ',' , map_entry } , [ ',' ] ] , ')' ;
+map_entry = IDENTIFIER , ':' , expression ;
 
-(* Array access *)
-array_access = ( "at" expression | "@" expression | "[" expression "]" ) ;
+string_interpolation = '\'' , { string_part } , '\''
+                     | '"' , { string_part } , '"' ;
+string_part = STRING_CONTENT | '{' , expression , '}' ;
 
-(* Method calls *)
-method_call = "." method_name [ "!" ] [ argument_list ] [ method_chaining ] ;
-method_name = identifier ;
-method_chaining = ( "then" | "and" ) "." method_name [ "!" ] [ argument_list ] [ method_chaining ] ;
+map_block_assignment_rhs = NEWLINE , INDENT , { map_block_entry } , DEDENT ;
+map_block_entry = IDENTIFIER , 'is' , expression , NEWLINE ;
 
-(* Collection method calls - space-separated syntax *)
-collection_method_call = identifier collection_method_name argument_list ;
-collection_method_name = "add" | "remove" | "contains" | "length" | "size" ;
+function_definition = 'fn' , IDENTIFIER , [ function_parameters ] , function_body ;
+function_parameters = '(' , [ parameter_definition , { ',' , parameter_definition } ] , ')' ;
+parameter_definition = IDENTIFIER , [ ':' , type_specifier ] , [ expression ] ;
 
-(* Function calls *)
-function_call = identifier [ argument_list ] ;
-function_call_statement = function_call ;
+function_body = ( expression , NEWLINE )
+              | ( NEWLINE , INDENT , { statement } , [ [ 'return' ] , expression , NEWLINE ] , DEDENT )
+              | ( NEWLINE , INDENT , { statement } , DEDENT )
+              ;
 
-(* Instantiation *)
-instantiation = identifier [ "!" ] [ argument_list ]
-              | identifier "with" named_argument_list ;
+object_definition = 'object' , IDENTIFIER , NEWLINE , INDENT , { object_member } , DEDENT ;
+object_member = field_definition | method_definition ;
+field_definition = IDENTIFIER , [ '?' , expression ] , NEWLINE | IDENTIFIER , NEWLINE ;
+method_definition = IDENTIFIER , [ function_parameters ] , function_body 
+                  | 'make' , [ function_parameters ] , function_body ;
 
-(* Arguments *)
-argument_list = expression { expression }
-              | "(" [ expression { "," expression } ] ")" ;
+store_definition = 'store' , [ 'actor' ] , IDENTIFIER , [ 'for' , IDENTIFIER ] , NEWLINE , INDENT , { store_member } , DEDENT ;
+store_member = field_definition | method_definition | relation_definition | cast_definition | receive_handler ;
+relation_definition = '&' , IDENTIFIER , NEWLINE ;
+cast_definition = 'as' , ( 'string' | 'map' | 'list' ) , cast_body ;
+cast_body = ( expression , NEWLINE )
+          | ( NEWLINE , INDENT , { ( expression | assignment ) , NEWLINE } , DEDENT )
+          ;
+receive_handler = '@' , IDENTIFIER , function_body ;
 
-named_argument_list = named_argument { "," named_argument } ;
-named_argument = identifier expression ;
+actor_definition = 'actor' , IDENTIFIER , NEWLINE , INDENT , { actor_member } , DEDENT ;
+actor_member = field_definition | method_definition | receive_handler ;
 
-(* Function definitions *)
-function_definition = "fn" identifier "with" parameter_list [ indented_block ] ;
-parameter_list = [ parameter { "," parameter } ] ;
-parameter = identifier [ default_value ] ;
-default_value = literal ;
+conditional_statement = if_then_else_statement
+                      | unless_statement
+                      | postfix_unless_statement
+                      ;
 
-(* Object definitions *)
-object_definition = "object" identifier [ indented_block ] ;
+if_then_else_statement = 'if' , expression , statement_or_block
+                         , { 'else' , 'if' , expression , statement_or_block }
+                         , [ 'else' , statement_or_block ]
+                         ;
+unless_statement = 'unless' , expression , statement_or_block ;
+postfix_unless_statement = expression_statement , 'unless' , expression ;
 
-(* Store definitions *)
-store_definition = "store" identifier [ indented_block ] ;
+statement_or_block = statement
+                   | ( NEWLINE , INDENT , { statement } , DEDENT )
+                   ;
 
-(* Actor definitions *)
-actor_definition = "store" "actor" identifier [ indented_block ] ;
+loop_statement = while_loop | until_loop | iterate_loop ;
 
-(* Object/Store/Actor body content *)
-indented_block = newline indent body_content dedent ;
-body_content = { property_definition | method_definition | join_table_reference | message_handler | as_method_definition } ;
+while_loop = 'while' , expression , statement_or_block ;
+until_loop = 'until' , expression , statement_or_block ;
+iterate_loop = 'iterate' , expression , [ '(' , IDENTIFIER , ')' ] , statement_or_block ;
 
-property_definition = identifier [ "?" default_value ] [ doc_comment ] newline ;
-method_definition = identifier [ parameter_list ] [ indented_block ] ;
-join_table_reference = "&" identifier newline ;
-message_handler = "@" identifier [ parameter_list ] [ indented_block ] ;
-as_method_definition = ( "as" conversion_type | "as_" identifier ) [ indented_block ] ;
+module_definition = 'mod' , IDENTIFIER , NEWLINE , INDENT , { top_level_statement } , DEDENT ;
+use_statement = 'use' , qualified_identifier ;
+qualified_identifier = IDENTIFIER , { '.' , IDENTIFIER } ;
 
-(* Special method definitions *)
-make_method = "make" [ indented_block ] ;
+type_specifier = primitive_type | list_type | map_type | function_type | user_type ;
+primitive_type = 'i8' | 'i16' | 'i32' | 'i64' | 'f32' | 'f64' | 'bool' | 'string' | 'unit' ;
+list_type = '(' , type_specifier , ')' ;
+map_type = '(' , type_specifier , ':' , type_specifier , ')' ;
+function_type = 'fn' , '(' , [ type_specifier , { ',' , type_specifier } ] , ')' , '->' , type_specifier ;
+user_type = IDENTIFIER ;
 
-(* Control flow *)
-control_flow_statement = unless_statement | if_statement | while_loop | until_loop | iteration | push_statement ;
-
-unless_statement = "unless" expression statement_block
-                 | statement "unless" expression ;
-
-if_statement = "if" expression statement_block [ "else" statement_block ] ;
-
-while_loop = "while" expression statement_block ;
-
-until_loop = "until" identifier [ "from" expression ] [ "by" expression ] "is" expression statement_block ;
-
-iteration = across_iteration | iterate_statement ;
-across_iteration = expression "across" expression [ "with" named_argument_list ] [ "into" identifier ] ;
-iterate_statement = "iterate" expression expression [ parameter_reference ] ;
-
-push_statement = "push" expression "on" expression ;
-
-statement_block = indented_block | single_statement ;
-single_statement = statement ;
-
-(* Collection operations *)
-collection_operation = push_operation | pop_operation ;
-push_operation = "push" expression "on" expression ;
-pop_operation = expression ".pop" ;
-
-(* Error handling *)
-error_handling = "err" error_action ;
-error_handling_statement = expression error_handling ;
-error_action = "log" "return"
-             | default_value
-             | "return" "log" "err" ;
-
-(* Data conversion *)
-as_conversion = "as" conversion_type ;
-conversion_type = "string" | "map" | "list" | identifier ;
-
-(* Use statements *)
-use_statement = "use" module_list ;
-module_list = module_name { "," module_name } ;
-module_name = identifier { "." identifier } ;
-
-(* Built-in operations *)
-built_in_operation = log_operation | hash_operation | load_operation | create_operation | update_operation ;
-log_operation = "log" expression ;
-hash_operation = "hash" "." hash_algorithm expression ;
-hash_algorithm = "blake3" | identifier ;
-load_operation = "load" expression ;
-create_operation = "create" [ expression_list ] ;
-update_operation = "update" expression [ expression_list ] ;
-expression_list = expression { expression } ;
-
-(* Expression statements *)
-expression_statement = expression ;
-method_call_statement = expression method_call ;
-
-(* Parenthesized expressions *)
-parenthesized_expression = "(" expression ")" ;
-
-(* Special Coral constructs *)
-special_construct = across_iteration | iterate_statement | collection_operation ;
-
-(* Indentation handling *)
-indent = ? increase in indentation level ? ;
-dedent = ? decrease in indentation level ? ;
-newline = ? newline character ? ;
-
-(* Lexical elements *)
-letter = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" 
-       | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z"
-       | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M"
-       | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" ;
-
-digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
-
-string_char = ? any character except quote and newline (unless escaped) ? ;
-any_character_except_newline = ? any character except newline ? ;
-
-(* Keywords that are reserved *)
-(* fn, object, store, actor, is, as, with, use, make, return *)
-(* if, else, unless, while, until, for, in, across, into, iterate *)
-(* gt, lt, equals, gte, lte, yes, no, true, false *)
-(* log, empty, now, at, err, then, and, or, push, pop *)
+(* Lexical Tokens:
+   IDENTIFIER, STRING_LITERAL, INTEGER_LITERAL, FLOAT_LITERAL, STRING_CONTENT,
+   NEWLINE, INDENT, DEDENT, EOF,
+   Keywords: 'is', 'fn', 'true', 'false', 'yes', 'no', 'if', 'else', 'unless', 'while', 'until', 'iterate', 'return', 'break', 'continue', 'log', 'mod', 'use', 'object', 'store', 'actor', 'empty', 'now', 'or', 'and', 'not', 'equals', 'gt', 'gte', 'lt', 'lte', 'as', 'for', 'err', 'with', 'across', 'into', 'make',
+   Symbols: '.', '(', ')', ',', ':', '+', '-', '*', '/', '%', '=', '>', '>=', '<', '<=', '?', '!', '&', '@', '{', '}', '\'', '$'
+*)

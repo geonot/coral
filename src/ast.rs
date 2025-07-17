@@ -1,307 +1,629 @@
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Source location information
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SourceSpan {
+    pub file: std::sync::Arc<str>, // Use Arc<str> for shared filename
+    pub start_line: u32,
+    pub start_col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+}
+
+impl SourceSpan {
+    pub fn new(file: impl Into<std::sync::Arc<str>>, start_line: u32, start_col: u32, end_line: u32, end_col: u32) -> Self {
+        Self { 
+            file: file.into(), 
+            start_line, 
+            start_col, 
+            end_line, 
+            end_col 
+        }
+    }
+    
+    pub fn single_char(file: impl Into<std::sync::Arc<str>>, line: u32, col: u32) -> Self {
+        Self::new(file, line, col, line, col + 1)
+    }
+}
+
+// Global node ID counter for unique AST node identification
+static NODE_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// Unique identifier for each AST node
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NodeId(u32);
+
+impl NodeId {
+    pub fn new() -> Self {
+        NodeId(NODE_COUNTER.fetch_add(1, Ordering::SeqCst))
+    }
+    
+    pub fn as_u32(&self) -> u32 {
+        self.0
+    }
+}
+
+/// Comprehensive type system for Coral
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Type {
+    // Primitive types
+    I8, I16, I32, I64,
+    F32, F64,
+    Bool,
+    String,
+    
+    // Collection types
+    List(Box<Type>),
+    Map(Box<Type>, Box<Type>),
+    
+    // Function types
+    Function {
+        params: Vec<Type>,
+        return_type: Box<Type>,
+    },
+    
+    // User-defined types
+    Object {
+        name: String,
+        fields: HashMap<String, Type>,
+    },
+    Store {
+        name: String,
+        value_type: Box<Type>,
+    },
+    Actor {
+        name: String,
+        message_types: Vec<Type>,
+    },
+    
+    // Type variables for inference
+    TypeVar(u32),
+    
+    // Result type for error handling
+    Result(Box<Type>, Box<Type>),
+    
+    // Unit type
+    Unit,
+    
+    // Unknown type (for inference)
+    Unknown,
+}
+
+impl Type {
+    pub fn new_type_var() -> Self {
+        static TYPE_VAR_COUNTER: AtomicU32 = AtomicU32::new(0);
+        Type::TypeVar(TYPE_VAR_COUNTER.fetch_add(1, Ordering::SeqCst))
+    }
+    
+    pub fn is_numeric(&self) -> bool {
+        matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::F32 | Type::F64)
+    }
+    
+    pub fn is_integer(&self) -> bool {
+        matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64)
+    }
+    
+    pub fn is_float(&self) -> bool {
+        matches!(self, Type::F32 | Type::F64)
+    }
+    
+    /// Get the size in bytes for primitive types
+    pub fn size_bytes(&self) -> Option<usize> {
+        match self {
+            Type::I8 => Some(1),
+            Type::I16 => Some(2),
+            Type::I32 => Some(4),
+            Type::I64 => Some(8),
+            Type::F32 => Some(4),
+            Type::F64 => Some(8),
+            Type::Bool => Some(1),
+            Type::Unit => Some(0),
+            _ => None,
+        }
+    }
+    
+    /// Get LLVM type string representation
+    pub fn to_llvm_type(&self) -> String {
+        match self {
+            Type::I8 => "i8".to_string(),
+            Type::I16 => "i16".to_string(),
+            Type::I32 => "i32".to_string(),
+            Type::I64 => "i64".to_string(),
+            Type::F32 => "float".to_string(),
+            Type::F64 => "double".to_string(),
+            Type::Bool => "i1".to_string(),
+            Type::String => "i8*".to_string(),
+            Type::Unit => "void".to_string(),
+            Type::List(elem_type) => format!("{}*", elem_type.to_llvm_type()),
+            Type::Function { params, return_type } => {
+                let param_types: Vec<String> = params.iter().map(|t| t.to_llvm_type()).collect();
+                format!("{}({})*", return_type.to_llvm_type(), param_types.join(", "))
+            }
+            _ => "i8*".to_string(), // Default to pointer for complex types
+        }
+    }
+    
+    /// Display type information
+    pub fn to_string(&self) -> String {
+        match self {
+            Type::I8 => "i8".to_string(),
+            Type::I16 => "i16".to_string(),
+            Type::I32 => "i32".to_string(),
+            Type::I64 => "i64".to_string(),
+            Type::F32 => "f32".to_string(),
+            Type::F64 => "f64".to_string(),
+            Type::Bool => "bool".to_string(),
+            Type::String => "string".to_string(),
+            Type::List(inner) => format!("list<{}>", inner.to_string()),
+            Type::Map(key, value) => format!("map<{}, {}>", key.to_string(), value.to_string()),
+            Type::Function { params, return_type } => {
+                let param_types: Vec<String> = params.iter().map(|t| t.to_string()).collect();
+                format!("({}) -> {}", param_types.join(", "), return_type.to_string())
+            },
+            Type::Object { name, .. } => format!("object {}", name),
+            Type::Store { name, value_type } => format!("store {} of {}", name, value_type.to_string()),
+            Type::Actor { name, .. } => format!("actor {}", name),
+            Type::TypeVar(id) => format!("T{}", id),
+            Type::Result(ok, err) => format!("Result<{}, {}>", ok.to_string(), err.to_string()),
+            Type::Unit => "unit".to_string(),
+            Type::Unknown => "unknown".to_string(),
+        }
+    }
+}
+
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Type::I8 => write!(f, "i8"),
+            Type::I16 => write!(f, "i16"),
+            Type::I32 => write!(f, "i32"),
+            Type::I64 => write!(f, "i64"),
+            Type::F32 => write!(f, "f32"),
+            Type::F64 => write!(f, "f64"),
+            Type::Bool => write!(f, "bool"),
+            Type::String => write!(f, "string"),
+            Type::List(inner) => write!(f, "list<{}>", inner),
+            Type::Map(key, value) => write!(f, "map<{}, {}>", key, value),
+            Type::Function { params, return_type } => {
+                write!(f, "(")?;
+                for (i, param) in params.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", param)?;
+                }
+                write!(f, ") -> {}", return_type)
+            },
+            Type::Object { name, .. } => write!(f, "object {}", name),
+            Type::Store { name, value_type } => write!(f, "store {} of {}", name, value_type),
+            Type::Actor { name, .. } => write!(f, "actor {}", name),
+            Type::TypeVar(id) => write!(f, "T{}", id),
+            Type::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
+            Type::Unit => write!(f, "unit"),
+            Type::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+/// Binary operators
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BinaryOp {
+    // Arithmetic
+    Add, Sub, Mul, Div, Mod,
+    
+    // Comparison
+    Eq, Ne, Lt, Le, Gt, Ge,
+    Is, // Type or value identity comparison (x is y)
+    // Logical
+    And, Or, Xor, // Added Xor for logical exclusive or
+    
+    // Bitwise
+    BitAnd, BitOr, BitXor, Shl, Shr,
+}
+
+/// Trait for binary comparators that can be used as truth-value queries (qfn)
+pub trait QueryComparator {
+    /// Returns true if this BinaryOp is a query comparator (eq, ne, lt, le, gt, ge, is, xor)
+    fn is_query(&self) -> bool;
+}
+
+impl QueryComparator for BinaryOp {
+    fn is_query(&self) -> bool {
+        matches!(self, BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge | BinaryOp::Is | BinaryOp::Xor)
+    }
+}
+
+/// Unary operators
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UnaryOp {
+    Not, Neg, BitNot,
+}
+
+/// Literal values including Coral-specific literals
 #[derive(Debug, Clone, PartialEq)]
-pub struct Program {
-    pub statements: Vec<Statement>,
+pub enum Literal {
+    Integer(i64),
+    Float(f64),
+    String(String),
+    Bool(bool),
+    Unit,
+    No,       // Represents null/nil/none
+    Yes,
+    Empty,    // Represents empty collection
+    None,
+    Now,      // Represents current timestamp
+    Err,      // Represents an error (for error handling)
+}
+
+/// Parts of an interpolated string
+#[derive(Debug, Clone, PartialEq)]
+pub enum StringPart {
+    Literal(String),    // Static text like "hello "
+    Expression(Expr),   // Embedded expression like {name}
+}
+
+/// Expressions with full AST node information
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expr {
+    pub id: NodeId,
+    pub span: SourceSpan,
+    pub type_: Type,
+    pub kind: ExprKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Statement {
-    Assignment(Assignment),
-    FunctionDef(FunctionDef),
-    ObjectDef(ObjectDef),
-    StoreDef(StoreDef),
-    ActorDef(ActorDef),
-    ExpressionStmt(Expression),
-    UseStatement(UseStatement),
-    Comment(String),
+pub enum ExprKind {
+    Literal(Literal),
+    Identifier(String),
+    Binary {
+        op: BinaryOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Unary {
+        op: UnaryOp,
+        operand: Box<Expr>,
+    },
+    Call {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    Index {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
+    FieldAccess {
+        object: Box<Expr>,
+        field: String,
+    },
+    ListLiteral(Vec<Expr>),
+    MapLiteral(Vec<(Expr, Expr)>),
+    ListAppend {
+        list: Box<Expr>,
+        element: Box<Expr>,
+    },
+    MapInsert {
+        map: Box<Expr>,
+        key: Box<Expr>,
+        value: Box<Expr>,
+    },
+    StringInterpolation {
+        // For 'hello {name}' -> parts: ["hello ", name_expr, ""]
+        parts: Vec<StringPart>,
+    },
+    If {
+        condition: Box<Expr>,
+        then_branch: Box<Expr>,
+        else_branch: Option<Box<Expr>>,
+    },
+    Block(Vec<Stmt>),
+    Lambda {
+        params: Vec<Parameter>,
+        body: Box<Expr>,
+    },
+    Pipe {
+        name: String,
+        source: String,
+        destination: String,
+        nocopy: bool,
+    },
+    Io {
+        op: String,
+        args: Vec<Expr>,
+        nocopy: bool,
+    },
+}
+
+impl Expr {
+    pub fn new(span: SourceSpan, kind: ExprKind) -> Self {
+        Self {
+            id: NodeId::new(),
+            span,
+            type_: Type::Unknown,
+            kind,
+        }
+    }
+    
+    pub fn with_type(mut self, type_: Type) -> Self {
+        self.type_ = type_;
+        self
+    }
+}
+
+/// Statements with full AST node information
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stmt {
+    pub id: NodeId,
+    pub span: SourceSpan,
+    pub kind: StmtKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Assignment {
-    pub identifier: String,
-    pub value: Expression,
+pub enum StmtKind {
+    Expression(Expr),
+    Assignment {
+        target: Expr,
+        value: Expr,
+    },
+    If {
+        condition: Expr,
+        then_branch: Vec<Stmt>,
+        else_branch: Option<Vec<Stmt>>,
+    },
+    Unless {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
+    While {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
+    Until {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
+    For {
+        variable: String,
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
+    Iterate {
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
+    Return(Option<Expr>),
+    Break,
+    Continue,
+    Function {
+        name: String,
+        params: Vec<Parameter>,
+        return_type: Option<Type>,
+        body: Vec<Stmt>,
+    },
+    Object {
+        name: String,
+        fields: Vec<Field>,
+        methods: Vec<ObjectMethod>,  // Methods within the object
+    },
+    Store {
+        name: String,
+        value_type: Type,
+        initial_value: Option<Expr>,
+    },
+    Actor {
+        name: String,
+        fields: Vec<Field>,
+        handlers: Vec<MessageHandler>,
+    },
+    Import {
+        module: String,
+        items: Option<Vec<String>>,
+    },
+    ErrorHandler {
+        handler: ErrorHandler,
+        inner: Box<Stmt>, // The statement/expression being guarded
+    },
 }
 
+impl Stmt {
+    pub fn new(span: SourceSpan, kind: StmtKind) -> Self {
+        Self {
+            id: NodeId::new(),
+            span,
+            kind,
+        }
+    }
+}
+
+/// Error handler chain for statements like `call() err log return`
 #[derive(Debug, Clone, PartialEq)]
-pub struct FunctionDef {
-    pub name: String,
-    pub parameters: Vec<Parameter>,
-    pub body: Vec<Statement>,
+pub struct ErrorHandler {
+    pub actions: Vec<ErrorAction>,
+    pub span: SourceSpan,
 }
 
+/// Individual error handling actions (log, return, custom)
+#[derive(Debug, Clone, PartialEq)]
+pub enum ErrorAction {
+    Log(Option<Expr>),      // log or log expr
+    Return(Option<Expr>),   // return or return expr
+    Custom(Expr),           // custom error handler expression
+}
+
+/// Function parameter with optional default value
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     pub name: String,
-    pub default_value: Option<Expression>,
+    pub type_: Type,
+    pub default_value: Option<Expr>,  // For default parameters: fn greet(name, greeting 'hello')
+    pub span: SourceSpan,
 }
 
+/// Object field definition
 #[derive(Debug, Clone, PartialEq)]
-pub struct ObjectDef {
+pub struct Field {
     pub name: String,
-    pub properties: Vec<PropertyDef>,
-    pub methods: Vec<MethodDef>,
+    pub type_: Type,
+    pub default_value: Option<Expr>,
+    pub span: SourceSpan,
 }
 
+/// Object method definition (methods within objects)
 #[derive(Debug, Clone, PartialEq)]
-pub struct StoreDef {
+pub struct ObjectMethod {
     pub name: String,
-    pub properties: Vec<PropertyDef>,
-    pub methods: Vec<MethodDef>,
-    pub make_method: Option<MethodDef>,
-    pub as_methods: Vec<AsMethodDef>,
+    pub params: Vec<Parameter>,
+    pub return_type: Option<Type>,
+    pub body: Vec<Stmt>,
+    pub span: SourceSpan,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ActorDef {
-    pub name: String,
-    pub properties: Vec<PropertyDef>,
-    pub methods: Vec<MethodDef>,
-    pub join_tables: Vec<String>,
-    pub message_handlers: Vec<MessageHandler>,
-    pub make_method: Option<MethodDef>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PropertyDef {
-    pub name: String,
-    pub default_value: Option<Expression>,
-    pub doc_comment: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct MethodDef {
-    pub name: String,
-    pub parameters: Vec<Parameter>,
-    pub body: Vec<Statement>,
-}
-
+/// Actor message handler
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageHandler {
-    pub message_type: String,
-    pub parameters: Vec<Parameter>,
-    pub body: Vec<Statement>,
+    pub message_type: Type,
+    pub body: Vec<Stmt>,
+    pub span: SourceSpan,
 }
 
+/// Top-level program
 #[derive(Debug, Clone, PartialEq)]
-pub struct AsMethodDef {
-    pub conversion_type: String,
-    pub body: Vec<Statement>,
+pub struct Program {
+    pub statements: Vec<Stmt>,
+    pub span: SourceSpan,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct UseStatement {
-    pub modules: Vec<String>,
+/// AST visitor trait for traversals
+pub trait Visitor<T> {
+    fn visit_program(&mut self, program: &Program) -> T;
+    fn visit_stmt(&mut self, stmt: &Stmt) -> T;
+    fn visit_expr(&mut self, expr: &Expr) -> T;
+    fn visit_type(&mut self, type_: &Type) -> T;
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Expression {
-    Identifier(String),
-    Integer(i64),
-    Float(f64),
-    StringLiteral(String),
-    InterpolatedString(String),
-    Boolean(bool),
-    Array(Vec<Expression>),
-    ObjectLiteral(Vec<(String, Expression)>),
-    ParameterRef(String),
-    
-    // Binary operations
-    Binary {
-        left: Box<Expression>,
-        operator: BinaryOp,
-        right: Box<Expression>,
-    },
-    
-    // Unary operations
-    Unary {
-        operator: UnaryOp,
-        operand: Box<Expression>,
-    },
-    
-    // Ternary conditional
-    Ternary {
-        condition: Box<Expression>,
-        true_expr: Box<Expression>,
-        false_expr: Box<Expression>,
-    },
-    
-    // Function/method calls
-    FunctionCall {
-        name: String,
-        args: Vec<Expression>,
-        named_args: Vec<(String, Expression)>,
-    },
-    
-    MethodCall {
-        object: Box<Expression>,
-        method: String,
-        args: Vec<Expression>,
-        named_args: Vec<(String, Expression)>,
-        force_call: bool, // for method!
-        chaining: Option<Box<MethodChain>>,
-    },
-    
-    // Array access
-    ArrayAccess {
-        array: Box<Expression>,
-        index: Box<Expression>,
-        use_at_keyword: bool, // true for "at", false for "@"
-    },
-    
-    // Object instantiation
-    Instantiation {
-        type_name: String,
-        args: Vec<Expression>,
-        named_args: Vec<(String, Expression)>,
-        force_success: bool, // for object!
-    },
-    
-    // Special Coral constructs
-    AcrossIteration {
-        operation: Box<Expression>,
-        collection: Box<Expression>,
-        with_args: Vec<Expression>,
-        into_var: Option<String>,
-    },
-    
-    IterateStatement {
-        collection: Box<Expression>,
-        operation: Box<Expression>,
-        placeholder: Box<Expression>,
-    },
-    
-    // Error handling
-    ErrorHandling {
-        expression: Box<Expression>,
-        error_action: Box<ErrorAction>,
-    },
-    
-    // Data conversion
-    AsConversion {
-        expression: Box<Expression>,
-        target_type: String,
-    },
-    
-    // Control flow
-    IfExpression {
-        condition: Box<Expression>,
-        then_branch: Vec<Statement>,
-        else_branch: Option<Vec<Statement>>,
-    },
-    
-    UnlessExpression {
-        condition: Box<Expression>,
-        body: Vec<Statement>,
-        is_postfix: bool,
-    },
-    
-    WhileLoop {
-        condition: Box<Expression>,
-        body: Vec<Statement>,
-    },
-    
-    UntilLoop {
-        iterator: String,
-        start_value: Option<Box<Expression>>,
-        step_value: Option<Box<Expression>>,
-        end_condition: Box<Expression>,
-        body: Vec<Statement>,
-    },
-    
-    // Operations
-    LogOperation {
-        message: Box<Expression>,
-    },
-    
-    PushOperation {
-        item: Box<Expression>,
-    },
-    
-    IterateOperation {
-        collection: Box<Expression>,
-        function: Box<Expression>,
-        param_ref: Option<Box<Expression>>,
-    },
-    
-    AcrossOperation {
-        function_name: String,
-        collection: Box<Expression>,
-        result_var: Option<String>,
-        named_params: Vec<(String, Expression)>,
-    },
-    
-    UnlessBlock {
-        condition: Box<Expression>,
-        action: Box<Expression>,
-    },
-    
-    MessageHandler {
-        message_type: String,
-        parameters: Vec<Parameter>,
-        body: Vec<Statement>,
-    },
-    
-    // Literals
-    Empty,
-    Now,
+/// Mutable AST visitor trait for transformations
+pub trait VisitorMut {
+    fn visit_program_mut(&mut self, program: &mut Program);
+    fn visit_stmt_mut(&mut self, stmt: &mut Stmt);
+    fn visit_expr_mut(&mut self, expr: &mut Expr);
+    fn visit_type_mut(&mut self, type_: &mut Type);
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct MethodChain {
-    pub connector: ChainConnector, // "then" or "and"
-    pub method: String,
-    pub args: Vec<Expression>,
-    pub force_call: bool,
-    pub next: Option<Box<MethodChain>>,
+/// Utility functions for AST construction
+impl ExprKind {
+    pub fn literal(lit: Literal) -> Self {
+        ExprKind::Literal(lit)
+    }
+    
+    pub fn identifier(name: impl Into<String>) -> Self {
+        ExprKind::Identifier(name.into())
+    }
+    
+    pub fn binary(op: BinaryOp, left: Expr, right: Expr) -> Self {
+        ExprKind::Binary {
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+    
+    pub fn call(callee: Expr, args: Vec<Expr>) -> Self {
+        ExprKind::Call {
+            callee: Box::new(callee),
+            args,
+        }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ChainConnector {
-    Then,
-    And,
+impl StmtKind {
+    pub fn function(name: impl Into<String>, params: Vec<Parameter>, body: Vec<Stmt>) -> Self {
+        StmtKind::Function {
+            name: name.into(),
+            params,
+            return_type: None,
+            body,
+        }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum BinaryOp {
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    Modulo,
-    Power,
-    
-    // Coral-style comparisons
-    GreaterThan,
-    LessThan,
-    Equals,
-    GreaterThanOrEqual,
-    LessThanOrEqual,
-    
-    // Traditional comparisons
-    Equal,
-    NotEqual,
-    
-    // Logical
-    And,
-    Or,
-    
-    // Bitwise
-    BitwiseAnd,
-    BitwiseOr,
-    BitwiseXor,
-    LeftShift,
-    RightShift,
+/// Trait for truth-value inference for any expression or value
+pub trait Truthy {
+    /// Returns true if the value is considered 'true' in Coral
+    fn is_truthy(&self) -> bool;
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum UnaryOp {
-    Not,
-    Minus,
-    BitwiseNot,
+impl Truthy for Literal {
+    fn is_truthy(&self) -> bool {
+        match self {
+            Literal::Bool(false) => false,
+            Literal::Err => false,
+            _ => true,
+        }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ErrorAction {
-    LogReturn,
-    DefaultValue(Expression),
-    ReturnLogError,
+/// Helper for creating source spans during testing
+impl Default for SourceSpan {
+    fn default() -> Self {
+        SourceSpan::new("test".to_string(), 1, 1, 1, 1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_node_id_uniqueness() {
+        let id1 = NodeId::new();
+        let id2 = NodeId::new();
+        assert_ne!(id1, id2);
+    }
+    
+    #[test]
+    fn test_type_predicates() {
+        assert!(Type::I32.is_numeric());
+        assert!(Type::I32.is_integer());
+        assert!(!Type::I32.is_float());
+        
+        assert!(Type::F64.is_numeric());
+        assert!(!Type::F64.is_integer());
+        assert!(Type::F64.is_float());
+        
+        assert!(!Type::Bool.is_numeric());
+    }
+    
+    #[test]
+    fn test_expr_construction() {
+        let span = SourceSpan::default();
+        let expr = Expr::new(span.clone(), ExprKind::literal(Literal::Integer(42)));
+        
+        assert_eq!(expr.span, span);
+        assert_eq!(expr.type_, Type::Unknown);
+        assert!(matches!(expr.kind, ExprKind::Literal(Literal::Integer(42))));
+    }
+    
+    #[test]
+    fn test_binary_expr_construction() {
+        let span = SourceSpan::default();
+        let left = Expr::new(span.clone(), ExprKind::literal(Literal::Integer(1)));
+        let right = Expr::new(span.clone(), ExprKind::literal(Literal::Integer(2)));
+        
+        let binary = Expr::new(span.clone(), ExprKind::binary(BinaryOp::Add, left, right));
+        
+        if let ExprKind::Binary { op, .. } = &binary.kind {
+            assert_eq!(*op, BinaryOp::Add);
+        } else {
+            panic!("Expected binary expression");
+        }
+    }
+    
+    #[test]
+    fn test_query_comparator_trait() {
+        assert!(BinaryOp::Eq.is_query());
+        assert!(BinaryOp::Is.is_query());
+        assert!(BinaryOp::Xor.is_query());
+        assert!(!BinaryOp::Add.is_query());
+        assert!(!BinaryOp::And.is_query());
+    }
 }

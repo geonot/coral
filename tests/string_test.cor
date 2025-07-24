@@ -1,0 +1,4 @@
+fn log(message: string):
+    return
+
+log("hello world")

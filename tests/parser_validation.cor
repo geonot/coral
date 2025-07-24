@@ -1,0 +1,95 @@
+// Parser Validation Suite
+
+// =================================
+// Assignments & Literals
+// =================================
+message is "Hello, World!"
+count is 100
+ratio is 0.5
+is_active is yes
+is_pending is no
+nothing is empty
+timestamp is now
+
+// Reverse assignment
+(1, 2, 3) is my_list
+
+// Block assignment
+config is
+    host is "localhost"
+    port is 8080
+
+// =================================
+// Operators
+// =================================
+a is 1 + 2 * 3
+b is (1 + 2) * 3
+c is a > b and b < 10
+d is c or not is_active
+e is 10 equals 10
+f is 10 not equals 9
+
+// =================================
+// Conditionals
+// =================================
+status is if count gt 50
+    "High"
+else
+    "Low"
+
+unless is_pending
+    log "Not pending"
+
+log "Processing..." unless is_pending
+
+// Ternary
+status_text is count gt 90 ? "Urgent" ! "Normal"
+
+// =================================
+// Loops
+// =================================
+i is 0
+while i lt 3
+    i is i + 1
+
+until i equals 5
+    i is i + 1
+
+iterate(my_list)
+    log $
+
+// Across expression
+process.across(my_list)
+process.across(my_list).into(results)
+
+// =================================
+// Functions
+// =================================
+fn greet(name, greeting ? "Hello")
+    "{greeting}, {name}!"
+
+greet("Coral")
+greet(name: "Coral", greeting: "Welcome")
+
+// =================================
+// Objects & Stores
+// =================================
+object user
+    name
+    email ? "none@example.com"
+
+    say_hello
+        "Hello, my name is {name}"
+
+store task
+    description
+    completed ? no
+
+    complete
+        completed is yes
+
+// =================================
+// Error Handling
+// =================================
+data is load("data.json") err (:)
+critical_op() err return log "Critical failure"

@@ -124,14 +124,13 @@ impl Parser {
             TokenType::Unless => self.parse_unless_statement(),
             TokenType::While => self.parse_while_statement(),
             TokenType::Until => self.parse_until_statement(),
-            TokenType::For => self.parse_for_statement(),
             TokenType::Iterate => self.parse_iterate_statement(),
             TokenType::Return => self.parse_return_statement(),
             TokenType::Break => self.parse_break_statement(),
             TokenType::Continue => self.parse_continue_statement(),
             TokenType::Import => self.parse_import_statement(),
-            // TokenType::Pipe => self.parse_pipe_statement(),
-            // TokenType::Io => self.parse_io_statement(),
+            TokenType::PipeKeyword => self.parse_pipe_statement(),
+            TokenType::IoKeyword => self.parse_io_statement(),
             _ => self.parse_expression_statement(),
         }
     }
@@ -147,13 +146,8 @@ impl Parser {
         } else {
             None
         };
-        // Accept optional colon before block
-        if self.match_token(TokenType::Colon) {
-            self.skip_newlines();
-        } else {
-            // If no colon, still expect a newline and indent for the block
-            self.skip_newlines(); // Ensure we are on a new line
-        }
+        
+        self.skip_newlines(); // Skip any newlines before the body block
 
         // The parse_block_statements function will handle consuming the Indent and Dedent
         let body = self.parse_block_statements()?;
@@ -172,7 +166,6 @@ impl Parser {
         
         let name_token = self.consume(TokenType::Identifier, "Expected object name")?;
         
-        self.consume(TokenType::Colon, "Expected ':' after object name")?;
         self.skip_newlines();
         
         let (fields, methods) = self.parse_object_body()?;
@@ -191,20 +184,15 @@ impl Parser {
         let name_token = self.consume(TokenType::Identifier, "Expected store name")?;
         let name = name_token.lexeme.clone();
         
-        self.consume(TokenType::Colon, "Expected ':' after store name")?;
-        let value_type = self.parse_type()?;
+        self.skip_newlines();
         
-        let initial_value = if self.match_token(TokenType::Equal) {
-            Some(self.parse_expression()?)
-        } else {
-            None
-        };
+        let (fields, methods) = self.parse_object_body()?;
         
         let span = self.span_from_token(&start);
         Ok(Stmt::new(span, StmtKind::Store {
             name,
-            value_type,
-            initial_value,
+            fields,
+            methods,
         }))
     }
     
@@ -214,7 +202,6 @@ impl Parser {
         let name_token = self.consume(TokenType::Identifier, "Expected actor name")?;
         let name = name_token.lexeme.clone();
 
-        self.consume(TokenType::Colon, "Expected ':' after actor name")?;
         self.skip_newlines();
 
         let (fields, _methods, handlers) = self.parse_actor_body()?;
@@ -347,12 +334,10 @@ impl Parser {
         let start = self.advance(); // consume 'if'
         
         let condition = self.parse_expression()?;
-        self.consume(TokenType::Colon, "Expected ':' after if condition")?;
         self.skip_newlines();
         let then_branch = self.parse_block_statements()?;
         
         let else_branch = if self.match_token(TokenType::Else) {
-            self.consume(TokenType::Colon, "Expected ':' after else")?;
             self.skip_newlines();
             if self.check(TokenType::If) {
                 // else if
@@ -376,7 +361,6 @@ impl Parser {
     fn parse_unless_statement(&mut self) -> ParseResult<Stmt> {
         let start = self.advance(); // consume 'unless'
         let condition = self.parse_expression()?;
-        self.consume(TokenType::Colon, "Expected ':' after unless condition")?;
         self.skip_newlines();
         let body = self.parse_block_statements()?;
         let span = self.span_from_token(&start);
@@ -386,7 +370,6 @@ impl Parser {
     fn parse_while_statement(&mut self) -> ParseResult<Stmt> {
         let start = self.advance(); // consume 'while'
         let condition = self.parse_expression()?;
-        self.consume(TokenType::Colon, "Expected ':' after while condition")?;
         self.skip_newlines();
         let body = self.parse_block_statements()?;
         let span = self.span_from_token(&start);
@@ -396,38 +379,16 @@ impl Parser {
     fn parse_until_statement(&mut self) -> ParseResult<Stmt> {
         let start = self.advance(); // consume 'until'
         let condition = self.parse_expression()?;
-        self.consume(TokenType::Colon, "Expected ':' after until condition")?;
         self.skip_newlines();
         let body = self.parse_block_statements()?;
         let span = self.span_from_token(&start);
         Ok(Stmt::new(span, StmtKind::Until { condition, body }))
     }
 
-    fn parse_for_statement(&mut self) -> ParseResult<Stmt> {
-        let start = self.advance(); // consume 'for'
-        
-        let var_token = self.consume(TokenType::Identifier, "Expected variable name")?;
-        let variable = var_token.lexeme.clone();
-        
-        self.consume(TokenType::In, "Expected 'in' after for variable")?;
-        let iterable = self.parse_expression()?;
-        
-        self.skip_newlines();
-        let body = self.parse_block_statements()?;
-        
-        let span = self.span_from_token(&start);
-        Ok(Stmt::new(span, StmtKind::For {
-            variable,
-            iterable,
-            body,
-        }))
-    }
-    
     fn parse_iterate_statement(&mut self) -> ParseResult<Stmt> {
         let start = self.advance(); // consume 'iterate'
         
         let iterable = self.parse_expression()?;
-        self.consume(TokenType::Colon, "Expected ':' after iterate expression")?;
         self.skip_newlines();
         let body = self.parse_block_statements()?;
         
@@ -491,12 +452,61 @@ impl Parser {
         let span = self.span_from_token(&start);
         Ok(Stmt::new(span, StmtKind::Import { module, items }))
     }
+
+    fn parse_pipe_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'pipe'
+
+        let name_token = self.consume(TokenType::Identifier, "Expected pipe name")?;
+        let name = name_token.lexeme.clone();
+
+        self.consume(TokenType::From, "Expected 'from' after pipe name")?;
+        let source_token = self.consume(TokenType::Identifier, "Expected source name")?;
+        let source = source_token.lexeme.clone();
+
+        self.consume(TokenType::To, "Expected 'to' after source name")?;
+        let destination_token = self.consume(TokenType::Identifier, "Expected destination name")?;
+        let destination = destination_token.lexeme.clone();
+
+        let nocopy = self.match_token(TokenType::Nocopy);
+
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Pipe {
+            name,
+            source,
+            destination,
+            nocopy,
+        }))
+    }
+
+    fn parse_io_statement(&mut self) -> ParseResult<Stmt> {
+        let start = self.advance(); // consume 'io'
+
+        let op_token = self.consume(TokenType::Identifier, "Expected IO operation name")?;
+        let op = op_token.lexeme.clone();
+
+        self.consume(TokenType::LeftParen, "Expected '(' after IO operation name")?;
+        let args = if self.check(TokenType::RightParen) {
+            Vec::new()
+        } else {
+            self.parse_expression_list()? // Reuse expression list parsing for arguments
+        };
+        self.consume(TokenType::RightParen, "Expected ')' after IO arguments")?;
+
+        let nocopy = self.match_token(TokenType::Nocopy);
+
+        let span = self.span_from_token(&start);
+        Ok(Stmt::new(span, StmtKind::Io {
+            op,
+            args,
+            nocopy,
+        }))
+    }
     
     fn parse_expression_statement(&mut self) -> ParseResult<Stmt> {
         let expr = self.parse_expression()?;
         
-        // Check for assignment with 'is' (Coral syntax) or '=' (legacy)
-        if self.match_token(TokenType::Is) || self.match_token(TokenType::Equal) {
+        // Check for assignment with 'is' (Coral syntax)
+        if self.match_token(TokenType::Is) {
             let value = self.parse_expression()?;
             
             let span = SourceSpan::new(
@@ -568,10 +578,24 @@ impl Parser {
     fn parse_equality(&mut self) -> ParseResult<Expr> {
         let mut expr = self.parse_comparison()?;
         
-        while let Some(op) = self.match_equality_op() {
-            let right = self.parse_comparison()?;
-            let span = self.span_between(&expr.span, &right.span);
-            expr = Expr::new(span, ExprKind::binary(op, expr, right));
+        loop {
+            let op = if self.match_token(TokenType::Equals) {
+                Some(BinaryOp::Eq)
+            } else if self.check(TokenType::Not) && self.tokens.get(self.current + 1).map_or(false, |t| t.token_type == TokenType::Equals) {
+                self.advance(); // consume 'not'
+                self.advance(); // consume 'equals'
+                Some(BinaryOp::Ne)
+            } else {
+                None
+            };
+
+            if let Some(op) = op {
+                let right = self.parse_comparison()?;
+                let span = self.span_between(&expr.span, &right.span);
+                expr = Expr::new(span, ExprKind::binary(op, expr, right));
+            } else {
+                break;
+            }
         }
         
         Ok(expr)
@@ -707,6 +731,28 @@ impl Parser {
                     expr = Expr::new(span, ExprKind::ListAppend {
                         list: Box::new(expr),
                         element: Box::new(element),
+                    });
+                } else if field_name == "across" {
+                    // Across expression: callee.across(iterable)
+                    self.consume(TokenType::LeftParen, "Expected '(' after 'across'")?;
+                    let iterable = self.parse_expression()?;
+                    self.consume(TokenType::RightParen, "Expected ')' after iterable")?;
+                    
+                    let into = if self.match_token(TokenType::Dot) {
+                        self.consume(TokenType::Identifier, "Expected 'into' after '.'")?;
+                        self.consume(TokenType::LeftParen, "Expected '(' after 'into'")?;
+                        let into_token = self.consume(TokenType::Identifier, "Expected identifier in 'into'")?;
+                        self.consume(TokenType::RightParen, "Expected ')' after 'into' identifier")?;
+                        Some(into_token.lexeme)
+                    } else {
+                        None
+                    };
+
+                    let span = self.span_between(&expr.span, &self.previous().span);
+                    expr = Expr::new(span, ExprKind::Across {
+                        callee: Box::new(expr),
+                        iterable: Box::new(iterable),
+                        into,
                     });
                 } else {
                     // Regular field access
@@ -959,15 +1005,17 @@ impl Parser {
                 let name_token = self.consume(TokenType::Identifier, "Expected parameter name")?;
                 let name = name_token.lexeme.clone();
                 
-                // Check for type annotation (param: type) or default value
-                let (type_, default_value) = if self.match_token(TokenType::Colon) {
-                    // Traditional typed parameter: param: type
-                    let type_ = self.parse_type()?;
-                    (type_, None)
+                // Updated parsing logic for type and default value
+                let type_ = if self.match_token(TokenType::Colon) {
+                    self.parse_type()?
                 } else {
-                    // Coral-style parameter with optional default value
-                    let default_value = self.try_parse_default_value();
-                    (Type::Unknown, default_value) // Type will be inferred
+                    Type::Unknown
+                };
+
+                let default_value = if self.match_token(TokenType::Question) {
+                    Some(self.parse_expression()?)
+                } else {
+                    None
                 };
                 
                 let span = self.token_to_span(&name_token);
@@ -987,39 +1035,35 @@ impl Parser {
         Ok(params)
     }
 
-    /// Parse a default value for a parameter using lookahead instead of backtracking
-    fn try_parse_default_value(&mut self) -> Option<Expr> {
-        // Use lookahead to determine if we can parse an expression
-        if self.is_expression_start() {
-            match self.parse_expression() {
-                Ok(expr) => Some(expr),
-                Err(_) => None, // Should not happen if lookahead is correct
-            }
-        } else {
-            None
-        }
-    }
     
-    /// Check if the current token could start an expression (lookahead)
-    fn is_expression_start(&self) -> bool {
-        match self.peek().token_type {
-            TokenType::Integer | TokenType::Float | TokenType::String | 
-            TokenType::InterpolatedString | TokenType::True | TokenType::False |
-            TokenType::No | TokenType::Yes | TokenType::Empty | TokenType::Now |
-            TokenType::Identifier | TokenType::Dollar |
-            TokenType::LeftParen | TokenType::LeftBracket | TokenType::LeftBrace |
-            TokenType::If | TokenType::Fn |
-            TokenType::Bang | TokenType::Minus | TokenType::Tilde => true,
-            _ => false,
-        }
-    }
     
-    fn parse_argument_list(&mut self) -> ParseResult<Vec<Expr>> {
+    fn parse_argument_list(&mut self) -> ParseResult<Vec<Argument>> {
+        let mut args = Vec::new();
+        
         if self.check(TokenType::RightParen) {
-            return Ok(Vec::new());
+            return Ok(args);
         }
         
-        self.parse_expression_list()
+        loop {
+            let name = if self.check(TokenType::Identifier) && self.tokens.get(self.current + 1).map_or(false, |t| t.token_type == TokenType::Colon) {
+                let name_token = self.advance();
+                self.advance(); // consume ':'
+                Some(name_token.lexeme)
+            } else {
+                None
+            };
+            
+            let value = self.parse_expression()?;
+            let span = value.span.clone();
+            
+            args.push(Argument { name, value, span });
+            
+            if !self.match_token(TokenType::Comma) {
+                break;
+            }
+        }
+        
+        Ok(args)
     }
     
     fn parse_expression_list(&mut self) -> ParseResult<Vec<Expr>> {
@@ -1144,7 +1188,7 @@ impl Parser {
         Ok((fields, methods))
     }
     
-    fn parse_message_handlers(&mut self) -> ParseResult<Vec<MessageHandler>> {
+    fn _parse_message_handlers(&mut self) -> ParseResult<Vec<MessageHandler>> {
         let mut handlers = Vec::new();
         
         // Expect an Indent token to start the handlers block
@@ -1302,33 +1346,16 @@ impl Parser {
 
 
     // Operator matching helpers - optimized with lookup tables
-    fn match_equality_op(&mut self) -> Option<BinaryOp> {
-        if self.current >= self.tokens.len() {
-            return None;
-        }
-        
-        let op = match self.tokens[self.current].token_type {
-            TokenType::EqualEqual => Some(BinaryOp::Eq),
-            TokenType::BangEqual => Some(BinaryOp::Ne),
-            _ => None,
-        };
-        
-        if op.is_some() {
-            self.current += 1;
-        }
-        op
-    }
-    
     fn match_comparison_op(&mut self) -> Option<BinaryOp> {
         if self.current >= self.tokens.len() {
             return None;
         }
         
         let op = match self.tokens[self.current].token_type {
-            TokenType::Greater => Some(BinaryOp::Gt),
-            TokenType::GreaterEqual => Some(BinaryOp::Ge),
-            TokenType::Less => Some(BinaryOp::Lt),
-            TokenType::LessEqual => Some(BinaryOp::Le),
+            TokenType::Gt => Some(BinaryOp::Gt),
+            TokenType::Gte => Some(BinaryOp::Ge),
+            TokenType::Lt => Some(BinaryOp::Lt),
+            TokenType::Lte => Some(BinaryOp::Le),
             _ => None,
         };
         
@@ -1447,7 +1474,7 @@ impl Parser {
         self.tokens[self.current - 1].clone()
     }
     
-    fn check_at_offset(&self, offset: usize, token_type: TokenType) -> bool {
+    fn _check_at_offset(&self, offset: usize, token_type: TokenType) -> bool {
         if self.current + offset >= self.tokens.len() {
             false
         } else {
@@ -1879,6 +1906,26 @@ mod tests {
             assert!(nocopy);
         } else {
             panic!("Expected io statement");
+        }
+    }
+
+    #[test]
+    fn test_function_definition_with_default_value() {
+        let code = r#"fn test_func(a, b ? 10)
+    return a + b"#;
+        let stmt = parse_statement(code).unwrap();
+        if let StmtKind::Function { name, params, .. } = stmt.kind {
+            assert_eq!(name, "test_func");
+            assert_eq!(params.len(), 2);
+            assert_eq!(params[0].name, "a");
+            assert!(params[0].default_value.is_none());
+            assert_eq!(params[1].name, "b");
+            assert!(params[1].default_value.is_some());
+            if let Some(expr) = &params[1].default_value {
+                assert!(matches!(expr.kind, ExprKind::Literal(Literal::Integer(10))));
+            }
+        } else {
+            panic!("Expected function definition");
         }
     }
 }

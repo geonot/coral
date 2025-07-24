@@ -1,257 +1,14 @@
 use crate::ast::*;
-use std::collections::{HashMap, VecDeque};
-
-/// Error type for type inference failures
-#[derive(Debug, Clone)]
-pub enum TypeError {
-    TypeMismatch(InferType, InferType),
-    InfiniteType(TypeVar, InferType),
-    ArityMismatch(usize, usize),
-    FieldNotFound(String),
-    MethodNotFound(String),
-    NotAnObject(InferType),
-    NotCallable(InferType),
-    NotIterable(InferType),
-    UnknownVariable(String),
-    ConstraintUnsatisfied(Constraint),
-}
-
-impl std::fmt::Display for TypeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TypeError::TypeMismatch(expected, actual) => {
-                write!(f, "Type mismatch: expected {:?}, found {:?}", expected, actual)
-            }
-            TypeError::InfiniteType(var, ty) => {
-                write!(f, "Infinite type: {:?} occurs in {:?}", var, ty)
-            }
-            TypeError::ArityMismatch(expected, actual) => {
-                write!(f, "Arity mismatch: expected {} arguments, found {}", expected, actual)
-            }
-            TypeError::FieldNotFound(field) => {
-                write!(f, "Field '{}' not found", field)
-            }
-            TypeError::MethodNotFound(method) => {
-                write!(f, "Method '{}' not found", method)
-            }
-            TypeError::NotAnObject(ty) => {
-                write!(f, "Type {:?} is not an object", ty)
-            }
-            TypeError::NotCallable(ty) => {
-                write!(f, "Type {:?} is not callable", ty)
-            }
-            TypeError::NotIterable(ty) => {
-                write!(f, "Type {:?} is not iterable", ty)
-            }
-            TypeError::UnknownVariable(name) => {
-                write!(f, "Unknown variable '{}'", name)
-            }
-            TypeError::ConstraintUnsatisfied(constraint) => {
-                write!(f, "Constraint unsatisfied: {:?}", constraint)
-            }
-        }
-    }
-}
-
-/// Type variable generator for Hindley-Milner style inference
-#[derive(Debug, Clone)]
-pub struct TypeVarGen {
-    counter: usize,
-}
-
-impl TypeVarGen {
-    pub fn new() -> Self {
-        Self { counter: 0 }
-    }
-    
-    pub fn fresh(&mut self) -> TypeVar {
-        let var = TypeVar(self.counter);
-        self.counter += 1;
-        var
-    }
-}
-
-/// Type variables for inference
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypeVar(usize);
-
-impl std::fmt::Display for TypeVar {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "t{}", self.0)
-    }
-}
-
-/// Extended type system for complete inference
-#[derive(Debug, Clone, PartialEq)]
-pub enum InferType {
-    // Concrete types
-    Unit,
-    Bool,
-    Int,
-    Float,
-    String,
-    List(Box<InferType>),
-    Map(Box<InferType>, Box<InferType>),
-    
-    // Function types with effect tracking
-    Function {
-        params: Vec<InferType>,
-        return_type: Box<InferType>,
-        effects: EffectSet,
-    },
-    
-    // Object types with structural typing
-    Object {
-        name: String,
-        fields: HashMap<String, InferType>,
-        methods: HashMap<String, InferType>,
-        is_actor: bool,
-        is_store: bool,
-    },
-    
-    // Store type for data persistence
-    Store {
-        name: String,
-        value_type: Box<InferType>,
-        methods: HashMap<String, InferType>,
-    },
-    
-    // Actor type for message handling
-    Actor {
-        name: String,
-        fields: HashMap<String, InferType>,
-        handlers: HashMap<String, InferType>, // Use String instead of ast::Type
-    },
-    
-    // Type variables for inference
-    Var(TypeVar),
-    
-    // Quantified types for polymorphism
-    Forall(Vec<TypeVar>, Box<InferType>),
-    
-    // Union types for error handling
-    Union(Vec<InferType>),
-    
-    // Result type for error propagation
-    Result(Box<InferType>, Box<InferType>),
-    
-    // Iterator types for Coral's iteration model
-    Iterator(Box<InferType>),
-    
-    // Unknown type that needs resolution
-    Unknown,
-}
-
-/// Effect system for tracking side effects
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct EffectSet {
-    pub io: bool,
-    pub store: bool,
-    pub actor_send: bool,
-    pub mutation: bool,
-}
-
-impl EffectSet {
-    pub fn pure() -> Self {
-        Self::default()
-    }
-    
-    pub fn io() -> Self {
-        Self { io: true, ..Default::default() }
-    }
-    
-    pub fn store() -> Self {
-        Self { store: true, ..Default::default() }
-    }
-    
-    pub fn actor() -> Self {
-        Self { actor_send: true, ..Default::default() }
-    }
-    
-    pub fn union(&self, other: &Self) -> Self {
-        Self {
-            io: self.io || other.io,
-            store: self.store || other.store,
-            actor_send: self.actor_send || other.actor_send,
-            mutation: self.mutation || other.mutation,
-        }
-    }
-}
-
-/// Type substitution map
-type Substitution = HashMap<TypeVar, InferType>;
-
-/// Constraint between types for inference
-#[derive(Debug, Clone)]
-pub enum Constraint {
-    Equal(InferType, InferType),
-    HasField(InferType, String, InferType),
-    HasMethod(InferType, String, InferType),
-    IsCallable(InferType, Vec<InferType>, InferType),
-    IsIterable(InferType, InferType),
-}
-
-/// Type environment for scoped type checking
-#[derive(Debug, Clone)]
-pub struct TypeEnv {
-    bindings: HashMap<String, InferType>,
-    parent: Option<Box<TypeEnv>>,
-}
-
-impl TypeEnv {
-    pub fn new() -> Self {
-        Self {
-            bindings: HashMap::new(),
-            parent: None,
-        }
-    }
-    
-    pub fn extend(&self) -> Self {
-        Self {
-            bindings: HashMap::new(),
-            parent: Some(Box::new(self.clone())),
-        }
-    }
-    
-    pub fn bind(&mut self, name: String, ty: InferType) {
-        self.bindings.insert(name, ty);
-    }
-    
-    pub fn lookup(&self, name: &str) -> Option<InferType> {
-        self.bindings.get(name).cloned()
-            .or_else(|| self.parent.as_ref()?.lookup(name))
-    }
-}
-
-/// The main type resolver - this is where the magic happens
-pub struct TypeResolver {
-    var_gen: TypeVarGen,
-    constraints: Vec<Constraint>,
-    env: TypeEnv,
-    builtin_types: HashMap<String, InferType>,
-    object_definitions: HashMap<String, InferType>,
-    store_types: HashMap<String, InferType>,
-    actor_types: HashMap<String, InferType>,
-}
+use crate::resolver::{
+    error::TypeError,
+    types::{Constraint, EffectSet, InferType},
+    TypeResolver,
+};
+use std::collections::HashMap;
 
 impl TypeResolver {
-    pub fn new() -> Self {
-        let mut resolver = Self {
-            var_gen: TypeVarGen::new(),
-            constraints: Vec::new(),
-            env: TypeEnv::new(),
-            builtin_types: HashMap::new(),
-            object_definitions: HashMap::new(),
-            store_types: HashMap::new(),
-            actor_types: HashMap::new(),
-        };
-        
-        resolver.initialize_builtins();
-        resolver
-    }
-    
     /// Initialize built-in types and functions
-    fn initialize_builtins(&mut self) {
+    pub(super) fn initialize_builtins(&mut self) {
         // Built-in types
         self.builtin_types.insert("int".to_string(), InferType::Int);
         self.builtin_types.insert("float".to_string(), InferType::Float);
@@ -281,28 +38,8 @@ impl TypeResolver {
         self.env.bind("empty".to_string(), InferType::Var(self.var_gen.fresh()));
     }
     
-    /// Main entry point for type resolution
-    pub fn resolve_program(&mut self, program: &mut Program) -> Result<(), TypeError> {
-        // Phase 1: Collect all type definitions (objects, stores, actors) and function signatures
-        self.collect_type_definitions(program)?;
-        self.collect_function_signatures(program)?;
-        
-        // Phase 2: Generate constraints for all statements
-        for stmt in &program.statements {
-            self.infer_statement(stmt)?;
-        }
-        
-        // Phase 3: Solve constraints using unification
-        let subst = self.solve_constraints()?;
-        
-        // Phase 4: Apply substitutions to resolve all types
-        self.apply_substitutions_to_program(program, &subst)?;
-        
-        Ok(())
-    }
-    
     /// Collect function signatures for forward references
-    fn collect_function_signatures(&mut self, program: &Program) -> Result<(), TypeError> {
+    pub(super) fn collect_function_signatures(&mut self, program: &Program) -> Result<(), TypeError> {
         for stmt in &program.statements {
             if let StmtKind::Function { name, params, return_type, .. } = &stmt.kind {
                 let mut param_types = Vec::new();
@@ -332,7 +69,7 @@ impl TypeResolver {
     }
     
     /// Collect object, store, and actor definitions for forward references
-    fn collect_type_definitions(&mut self, program: &Program) -> Result<(), TypeError> {
+    pub(super) fn collect_type_definitions(&mut self, program: &Program) -> Result<(), TypeError> {
         for stmt in &program.statements {
             match &stmt.kind {
                 StmtKind::Object { name, fields, methods } => {
@@ -348,8 +85,8 @@ impl TypeResolver {
                     self.env.bind(name.clone(), store_type);
                 }
                 
-                StmtKind::Actor { name, fields: _fields, handlers } => {
-                    let actor_type = self.create_actor_type(name, handlers)?;
+                StmtKind::Actor { name, fields, handlers } => {
+                    let actor_type = self.create_actor_type(name, fields, handlers)?;
                     self.actor_types.insert(name.clone(), actor_type.clone());
                     self.env.bind(name.clone(), actor_type);
                 }
@@ -361,7 +98,7 @@ impl TypeResolver {
     }
     
     /// Create object type from AST definition
-    fn create_object_type(
+    pub(super) fn create_object_type(
         &mut self,
         name: &str,
         fields: &[Field],
@@ -402,14 +139,32 @@ impl TypeResolver {
         if is_actor {
             self.add_actor_methods(&mut method_types)?;
         }
-        
-        Ok(InferType::Object {
+
+        // Add the 'make' constructor as a static method
+        let mut object_type_for_make = InferType::Object {
             name: name.to_string(),
-            fields: field_types,
-            methods: method_types,
+            fields: field_types.clone(),
+            methods: method_types.clone(),
             is_actor,
             is_store,
-        })
+        };
+        if let InferType::Object { methods, .. } = &mut object_type_for_make {
+            let make_params: Vec<InferType> = field_types.values().cloned().collect();
+            let make_return = InferType::Object {
+                name: name.to_string(),
+                fields: field_types.clone(),
+                methods: HashMap::new(), // An instance doesn't have the 'make' method
+                is_actor,
+                is_store,
+            };
+            methods.insert("make".to_string(), InferType::Function {
+                params: make_params,
+                return_type: Box::new(make_return),
+                effects: EffectSet::pure(),
+            });
+        }
+        
+        Ok(object_type_for_make)
     }
     
     /// Add built-in methods that all objects have
@@ -493,11 +248,12 @@ impl TypeResolver {
         }
         
         // Infer return type from body
-        let return_type = if method.body.is_empty() {
+        let return_type = if let Some(ret_type) = &method.return_type {
+            self.ast_type_to_infer_type(ret_type)?
+        } else if method.body.is_empty() {
             InferType::Unit
         } else {
-            // For now, use a type variable - we'll infer from body later
-            InferType::Var(self.var_gen.fresh())
+            self.infer_block(&method.body)?
         };
         
         Ok(InferType::Function {
@@ -508,7 +264,7 @@ impl TypeResolver {
     }
     
     /// Convert AST type to inference type
-    fn ast_type_to_infer_type(&mut self, ast_type: &Type) -> Result<InferType, TypeError> {
+    pub(super) fn ast_type_to_infer_type(&mut self, ast_type: &Type) -> Result<InferType, TypeError> {
         match ast_type {
             Type::I8 | Type::I16 | Type::I32 | Type::I64 => Ok(InferType::Int),
             Type::F32 | Type::F64 => Ok(InferType::Float),
@@ -549,18 +305,22 @@ impl TypeResolver {
                     Ok(InferType::Var(self.var_gen.fresh()))
                 }
             }
-            Type::TypeVar(id) => Ok(InferType::Var(TypeVar(*id as usize))),
+            Type::TypeVar(id) => Ok(InferType::Var(crate::resolver::types::TypeVar(*id as usize))),
             Type::Result(ok, err) => {
                 let ok_type = self.ast_type_to_infer_type(ok)?;
                 let err_type = self.ast_type_to_infer_type(err)?;
                 Ok(InferType::Result(Box::new(ok_type), Box::new(err_type)))
+            }
+            Type::Pipe(inner) => {
+                let inner_type = self.ast_type_to_infer_type(inner)?;
+                Ok(InferType::Pipe(Box::new(inner_type)))
             }
             Type::Unknown => Ok(InferType::Var(self.var_gen.fresh())),
         }
     }
 
     /// Convert InferType back to AST Type for updating the AST
-    fn infer_type_to_ast_type(&self, infer_type: &InferType) -> Type {
+    pub(super) fn infer_type_to_ast_type(&self, infer_type: &InferType) -> Type {
         match infer_type {
             InferType::Unit => Type::Unit,
             InferType::Bool => Type::Bool,
@@ -600,7 +360,8 @@ impl TypeResolver {
     }
 
     /// Convert InferType to a readable string for debugging and error reporting
-    fn type_to_string(&self, ty: &InferType) -> String {
+    #[allow(dead_code)]
+    pub(super) fn type_to_string(&self, ty: &InferType) -> String {
         match ty {
             InferType::Unit => "unit".to_string(),
             InferType::Bool => "bool".to_string(),
@@ -626,7 +387,7 @@ impl TypeResolver {
     }
 
     /// Main expression inference method - dispatches to specific expression types
-    fn infer_expression(&mut self, expr: &Expr) -> Result<InferType, TypeError> {
+    pub(super) fn infer_expression(&mut self, expr: &Expr) -> Result<InferType, TypeError> {
         match &expr.kind {
             ExprKind::Literal(lit) => self.infer_literal(lit),
             
@@ -758,8 +519,53 @@ impl TypeResolver {
                 })
             }
             
-            ExprKind::Pipe { .. } => Ok(InferType::Unit),
-            ExprKind::Io { .. } => Ok(InferType::Unit),
+            ExprKind::Pipe { name: _, source, destination, nocopy: _ } => {
+                let source_expr = Expr::new(SourceSpan::default(), ExprKind::Literal(Literal::String(source.clone())));
+                let destination_expr = Expr::new(SourceSpan::default(), ExprKind::Literal(Literal::String(destination.clone())));
+                let source_type = self.infer_expression(&source_expr)?;
+                let _destination_type = self.infer_expression(&destination_expr)?;
+
+                // For now, assume pipe element type is the source type
+                // TODO: More sophisticated type inference for pipes, considering destination
+                let pipe_element_type = source_type;
+
+                Ok(InferType::Pipe(Box::new(pipe_element_type)))
+            },
+            ExprKind::Io { op, args, nocopy: _ } => {
+                // Infer the type of the IO operation based on its name and args.
+                match op.as_str() {
+                    "read" => {
+                        // io.read(path: string) -> string
+                        if args.len() != 1 {
+                            return Err(TypeError::ArityMismatch(1, args.len()));
+                        }
+                        let arg_type = self.infer_expression(&args[0])?;
+                        self.constraints.push(Constraint::Equal(arg_type, InferType::String));
+                        Ok(InferType::String)
+                    }
+                    "write" => {
+                        // io.write(path: string, data: string) -> unit
+                        if args.len() != 2 {
+                            return Err(TypeError::ArityMismatch(2, args.len()));
+                        }
+                        let path_type = self.infer_expression(&args[0])?;
+                        let data_type = self.infer_expression(&args[1])?;
+                        self.constraints.push(Constraint::Equal(path_type, InferType::String));
+                        self.constraints.push(Constraint::Equal(data_type, InferType::String));
+                        Ok(InferType::Unit)
+                    }
+                    "print" => {
+                        // io.print(data: any) -> unit
+                        if args.len() != 1 {
+                            return Err(TypeError::ArityMismatch(1, args.len()));
+                        }
+                        // We don't need to constrain the argument type for print
+                        let _ = self.infer_expression(&args[0])?;
+                        Ok(InferType::Unit)
+                    }
+                    _ => Ok(InferType::Unknown),
+                }
+            },
             
             ExprKind::ListAppend { list, element } => {
                 let list_type = self.infer_expression(list)?;
@@ -794,7 +600,7 @@ impl TypeResolver {
     }
 
     /// Infer function type from definition
-    fn infer_function(
+    pub(super) fn infer_function(
         &mut self,
         _name: &str,
         params: &[Parameter],
@@ -840,7 +646,7 @@ impl TypeResolver {
     }
 
     /// Infer type for a statement
-    fn infer_statement(&mut self, stmt: &Stmt) -> Result<InferType, TypeError> {
+    pub(super) fn infer_statement(&mut self, stmt: &Stmt) -> Result<InferType, TypeError> {
         match &stmt.kind {
             StmtKind::Expression(expr) => self.infer_expression(expr),
             
@@ -866,18 +672,20 @@ impl TypeResolver {
             
             StmtKind::Object { name, fields, methods } => {
                 let obj_type = self.create_object_type(name, fields, methods, false, false)?;
-                self.object_definitions.insert(name.clone(), obj_type);
+                self.object_definitions.insert(name.clone(), obj_type.clone());
+                self.env.bind(name.clone(), obj_type);
                 Ok(InferType::Unit)
             }
             
             StmtKind::Store { name, value_type, initial_value } => {
                 let store_type = self.create_store_type(name, value_type, initial_value)?;
-                self.store_types.insert(name.clone(), store_type);
+                self.store_types.insert(name.clone(), store_type.clone());
+                self.env.bind(name.clone(), store_type);
                 Ok(InferType::Unit)
             }
             
-            StmtKind::Actor { name, fields: _fields, handlers } => {
-                let actor_type = self.create_actor_type(name, handlers)?;
+            StmtKind::Actor { name, fields, handlers } => {
+                let actor_type = self.create_actor_type(name, fields, handlers)?;
                 self.actor_types.insert(name.clone(), actor_type);
                 Ok(InferType::Unit)
             }
@@ -921,20 +729,32 @@ impl TypeResolver {
                 Ok(InferType::Unit)
             }
             
-            StmtKind::Return(expr) => {
-                if let Some(return_expr) = expr {
-                    self.infer_expression(return_expr)
+            StmtKind::Return(value) => {
+                if let Some(val) = value {
+                    self.infer_expression(val)
                 } else {
                     Ok(InferType::Unit)
                 }
             }
             
+            StmtKind::Pipe { name, source, destination, nocopy: _ } => {
+                let source_type = self.env.lookup(source).ok_or_else(|| TypeError::UnknownVariable(source.clone()))?;
+                let dest_type = self.env.lookup(destination).ok_or_else(|| TypeError::UnknownVariable(destination.clone()))?;
+
+                // Unify source and destination types to ensure they are compatible.
+                self.constraints.push(Constraint::Equal(source_type.clone(), dest_type));
+
+                // The pipe's element type is the unified type.
+                let pipe_type = InferType::Pipe(Box::new(source_type));
+                self.env.bind(name.clone(), pipe_type);
+                Ok(InferType::Unit)
+            }
             _ => Ok(InferType::Unit),
         }
     }
 
     /// Create store type with built-in methods
-    fn create_store_type(
+    pub(super) fn create_store_type(
         &mut self,
         name: &str,
         value_type: &Type,
@@ -974,6 +794,13 @@ impl TypeResolver {
             return_type: Box::new(InferType::Unit),
             effects: EffectSet::store(),
         });
+
+        // Add 'with_id' as a static method
+        methods.insert("with_id".to_string(), InferType::Function {
+            params: vec![InferType::Int],
+            return_type: Box::new(stored_type.clone()),
+            effects: EffectSet::store(),
+        });
         
         Ok(InferType::Store {
             name: name.to_string(),
@@ -983,23 +810,31 @@ impl TypeResolver {
     }
 
     /// Create actor type with message handlers
-    fn create_actor_type(
+    pub(super) fn create_actor_type(
         &mut self,
         name: &str,
+        fields: &[Field],
         handlers: &[MessageHandler],
     ) -> Result<InferType, TypeError> {
         let mut handler_types = HashMap::new();
+        let mut actor_fields = HashMap::new();
+
+        // Infer field types for the actor's internal state
+        for field in fields {
+            let field_type = self.ast_type_to_infer_type(&field.type_)?;
+            actor_fields.insert(field.name.clone(), field_type);
+        }
         
         // Infer handler types
         for handler in handlers {
             // Handler returns unit (async processing)
             let handler_type = InferType::Function {
                 params: vec![
-                    // Implicit actor instance parameter
+                    // Implicit actor instance parameter (self)
                     InferType::Object { 
                         name: name.to_string(), 
-                        fields: HashMap::new(), 
-                        methods: HashMap::new(), 
+                        fields: actor_fields.clone(), 
+                        methods: HashMap::new(), // Methods will be added later if needed
                         is_actor: true, 
                         is_store: false 
                     },
@@ -1010,18 +845,18 @@ impl TypeResolver {
                 effects: EffectSet::actor(),
             };
             
-            handler_types.insert(handler.message_type.to_string(), handler_type);
+            handler_types.insert(handler.message_type.clone(), handler_type);
         }
         
         Ok(InferType::Actor {
             name: name.to_string(),
-            fields: HashMap::new(),
+            fields: actor_fields,
             handlers: handler_types,
         })
     }
 
     /// Infer type for a block of statements
-    fn infer_block(&mut self, stmts: &[Stmt]) -> Result<InferType, TypeError> {
+    pub(super) fn infer_block(&mut self, stmts: &[Stmt]) -> Result<InferType, TypeError> {
         if stmts.is_empty() {
             return Ok(InferType::Unit);
         }
@@ -1152,6 +987,44 @@ impl TypeResolver {
 
     /// Infer function call types - handles Coral's flexible call syntax  
     fn infer_call_expression(&mut self, callee: &Expr, args: &[Expr]) -> Result<InferType, TypeError> {
+        if let ExprKind::FieldAccess { object, field } = &callee.kind {
+            if field == "make" {
+                let object_type = self.infer_expression(object)?;
+                if let InferType::Object { fields, .. } = &object_type {
+                    let make_params: Vec<InferType> = fields.values().cloned().collect();
+                    let make_return = object_type.clone();
+                    let func_type = InferType::Function {
+                        params: make_params,
+                        return_type: Box::new(make_return),
+                        effects: EffectSet::pure(),
+                    };
+                    let mut arg_types = Vec::new();
+                    for arg in args {
+                        arg_types.push(self.infer_expression(arg)?);
+                    }
+                    self.constraints.push(Constraint::IsCallable(func_type, arg_types, object_type.clone()));
+                    return Ok(object_type);
+                }
+            }
+            if field == "with_id" {
+                let object_type = self.infer_expression(object)?;
+                if let InferType::Store { value_type, .. } = &object_type {
+                    let func_type = InferType::Function {
+                        params: vec![InferType::Int],
+                        return_type: value_type.clone(),
+                        effects: EffectSet::store(),
+                    };
+                    let mut arg_types = Vec::new();
+                    for arg in args {
+                        arg_types.push(self.infer_expression(arg)?);
+                    }
+                    self.constraints.push(Constraint::IsCallable(func_type, arg_types, *value_type.clone()));
+                    return Ok(*value_type.clone());
+                }
+            }
+            return self.infer_method_call(object, field, args);
+        }
+
         let callee_type = self.infer_expression(callee)?;
         let mut arg_types = Vec::new();
         
@@ -1186,7 +1059,12 @@ impl TypeResolver {
         args: &[Expr],
     ) -> Result<InferType, TypeError> {
         let object_type = self.infer_expression(object)?;
-        let mut arg_types = vec![object_type.clone()]; // self parameter
+        let mut arg_types = Vec::new();
+
+        // Static methods like 'make' and 'with_id' don't have an implicit 'self'
+        if method != "make" && method != "with_id" {
+            arg_types.push(object_type.clone()); // self parameter
+        }
         
         for arg in args {
             arg_types.push(self.infer_expression(arg)?);
@@ -1202,677 +1080,5 @@ impl TypeResolver {
         self.constraints.push(Constraint::IsCallable(method_type, arg_types, return_type.clone()));
         
         Ok(return_type)
-    }
-    
-    /// Solve all constraints using unification algorithm
-    fn solve_constraints(&mut self) -> Result<Substitution, TypeError> {
-        let mut subst = Substitution::new();
-        let mut work_queue: VecDeque<Constraint> = self.constraints.drain(..).collect();
-        
-        while let Some(constraint) = work_queue.pop_front() {
-            match constraint {
-                Constraint::Equal(t1, t2) => {
-                    let unified_subst = self.unify(&t1, &t2)?;
-                    subst = self.compose_substitutions(&subst, &unified_subst);
-                    
-                    // Apply new substitution to remaining constraints
-                    for constraint in &mut work_queue {
-                        *constraint = self.apply_subst_to_constraint(constraint, &unified_subst);
-                    }
-                }
-                
-                Constraint::HasField(obj_type, field_name, field_type) => {
-                    self.solve_has_field_constraint(obj_type, field_name, field_type, &mut subst, &mut work_queue)?;
-                }
-                
-                Constraint::HasMethod(obj_type, method_name, method_type) => {
-                    self.solve_has_method_constraint(obj_type, method_name, method_type, &mut subst, &mut work_queue)?;
-                }
-                
-                Constraint::IsCallable(func_type, arg_types, return_type) => {
-                    self.solve_callable_constraint(func_type, arg_types, return_type, &mut subst, &mut work_queue)?;
-                }
-                
-                Constraint::IsIterable(container_type, element_type) => {
-                    self.solve_iterable_constraint(container_type, element_type, &mut subst, &mut work_queue)?;
-                }
-            }
-        }
-        
-        Ok(subst)
-    }
-    
-    /// Unification algorithm - the core of type inference
-    fn unify(&mut self, t1: &InferType, t2: &InferType) -> Result<Substitution, TypeError> {
-        match (t1, t2) {
-            // Same types unify trivially
-            (InferType::Unit, InferType::Unit) |
-            (InferType::Bool, InferType::Bool) |
-            (InferType::Int, InferType::Int) |
-            (InferType::Float, InferType::Float) |
-            (InferType::String, InferType::String) => Ok(Substitution::new()),
-            
-            // Variable unification
-            (InferType::Var(v), t) | (t, InferType::Var(v)) => {
-                if t == &InferType::Var(*v) {
-                    Ok(Substitution::new())
-                } else if self.occurs_check(*v, t) {
-                    Err(TypeError::InfiniteType(*v, t.clone()))
-                } else {
-                    let mut subst = Substitution::new();
-                    subst.insert(*v, t.clone());
-                    Ok(subst)
-                }
-            }
-            
-            // Structural types
-            (InferType::List(t1), InferType::List(t2)) => {
-                self.unify(t1, t2)
-            }
-            
-            (InferType::Map(k1, v1), InferType::Map(k2, v2)) => {
-                let key_subst = self.unify(k1, k2)?;
-                let val_subst = self.unify(v1, v2)?;
-                Ok(self.compose_substitutions(&key_subst, &val_subst))
-            }
-            
-            (InferType::Function { params: p1, return_type: r1, effects: e1 },
-             InferType::Function { params: p2, return_type: r2, effects: e2 }) => {
-                if p1.len() != p2.len() {
-                    return Err(TypeError::ArityMismatch(p1.len(), p2.len()));
-                }
-                
-                let mut subst = Substitution::new();
-                
-                // Unify parameters
-                for (param1, param2) in p1.iter().zip(p2.iter()) {
-                    let param_subst = self.unify(param1, param2)?;
-                    subst = self.compose_substitutions(&subst, &param_subst);
-                }
-                
-                // Unify return types
-                let return_subst = self.unify(r1, r2)?;
-                subst = self.compose_substitutions(&subst, &return_subst);
-                
-                // Effects must be compatible (simplified)
-                if e1 != e2 {
-                    // For now, just warn - in a real system we'd have effect subtyping
-                }
-                
-                Ok(subst)
-            }
-            
-            (InferType::Object { name: n1, fields: f1, .. },
-             InferType::Object { name: n2, fields: f2, .. }) => {
-                if n1 != n2 {
-                    return Err(TypeError::TypeMismatch(t1.clone(), t2.clone()));
-                }
-                
-                // Objects with same name should have same structure
-                let mut subst = Substitution::new();
-                for (field_name, field_type1) in f1 {
-                    if let Some(field_type2) = f2.get(field_name) {
-                        let field_subst = self.unify(field_type1, field_type2)?;
-                        subst = self.compose_substitutions(&subst, &field_subst);
-                    }
-                }
-                
-                Ok(subst)
-            }
-            
-            (InferType::Unknown, t) | (t, InferType::Unknown) => {
-                // Unknown should unify with the known type, or a fresh type variable if both are unknown
-                if t == &InferType::Unknown {
-                    Ok(Substitution::new())
-                } else {
-                    let mut subst = Substitution::new();
-                    // Create a fresh type variable and unify it with the known type
-                    let fresh_var = self.var_gen.fresh();
-                    subst.insert(fresh_var, t.clone());
-                    Ok(subst)
-                }
-            }
-            
-            // Everything else fails to unify
-            _ => Err(TypeError::TypeMismatch(t1.clone(), t2.clone())),
-        }
-    }
-    
-    /// Occurs check to prevent infinite types
-    fn occurs_check(&self, var: TypeVar, ty: &InferType) -> bool {
-        match ty {
-            InferType::Var(v) => var == *v,
-            InferType::List(inner) => self.occurs_check(var, inner),
-            InferType::Map(k, v) => self.occurs_check(var, k) || self.occurs_check(var, v),
-            InferType::Function { params, return_type, .. } => {
-                params.iter().any(|p| self.occurs_check(var, p)) || self.occurs_check(var, return_type)
-            }
-            InferType::Object { fields, methods, .. } => {
-                fields.values().any(|f| self.occurs_check(var, f)) ||
-                methods.values().any(|m| self.occurs_check(var, m))
-            }
-            InferType::Forall(vars, ty) => !vars.contains(&var) && self.occurs_check(var, ty),
-            InferType::Union(types) => types.iter().any(|t| self.occurs_check(var, t)),
-            InferType::Result(ok, err) => self.occurs_check(var, ok) || self.occurs_check(var, err),
-            InferType::Iterator(inner) => self.occurs_check(var, inner),
-            _ => false,
-        }
-    }
-    
-    /// Compose two substitutions
-    fn compose_substitutions(&self, s1: &Substitution, s2: &Substitution) -> Substitution {
-        let mut result = s1.clone();
-        
-        // Apply s2 to the range of s1
-        for (_var, ty) in result.iter_mut() {
-            *ty = self.apply_substitution(ty, s2);
-        }
-        
-        // Add bindings from s2 that aren't in s1
-        for (var, ty) in s2 {
-            if !result.contains_key(var) {
-                result.insert(*var, ty.clone());
-            }
-        }
-        
-        result
-    }
-    
-    /// Apply substitution to a type
-    fn apply_substitution(&self, ty: &InferType, subst: &Substitution) -> InferType {
-        match ty {
-            InferType::Var(v) => {
-                if let Some(replacement) = subst.get(v) {
-                    replacement.clone()
-                } else {
-                    ty.clone()
-                }
-            }
-            InferType::List(inner) => {
-                InferType::List(Box::new(self.apply_substitution(inner, subst)))
-            }
-            InferType::Map(k, v) => {
-                InferType::Map(
-                    Box::new(self.apply_substitution(k, subst)),
-                    Box::new(self.apply_substitution(v, subst)),
-                )
-            }
-            InferType::Function { params, return_type, effects } => {
-                InferType::Function {
-                    params: params.iter().map(|p| self.apply_substitution(p, subst)).collect(),
-                    return_type: Box::new(self.apply_substitution(return_type, subst)),
-                    effects: effects.clone(),
-                }
-            }
-            InferType::Object { name, fields, methods, is_actor, is_store } => {
-                let new_fields: HashMap<String, InferType> = fields.iter()
-                    .map(|(k, v)| (k.clone(), self.apply_substitution(v, subst)))
-                    .collect();
-                let new_methods: HashMap<String, InferType> = methods.iter()
-                    .map(|(k, v)| (k.clone(), self.apply_substitution(v, subst)))
-                    .collect();
-                
-                InferType::Object {
-                    name: name.clone(),
-                    fields: new_fields,
-                    methods: new_methods,
-                    is_actor: *is_actor,
-                    is_store: *is_store,
-                }
-            }
-            _ => ty.clone(),
-        }
-    }
-    
-    /// Apply substitution to constraint
-    fn apply_subst_to_constraint(&self, constraint: &Constraint, subst: &Substitution) -> Constraint {
-        match constraint {
-            Constraint::Equal(t1, t2) => {
-                Constraint::Equal(
-                    self.apply_substitution(t1, subst),
-                    self.apply_substitution(t2, subst),
-                )
-            }
-            Constraint::HasField(obj, field, field_type) => {
-                Constraint::HasField(
-                    self.apply_substitution(obj, subst),
-                    field.clone(),
-                    self.apply_substitution(field_type, subst),
-                )
-            }
-            Constraint::HasMethod(obj, method, method_type) => {
-                Constraint::HasMethod(
-                    self.apply_substitution(obj, subst),
-                    method.clone(),
-                    self.apply_substitution(method_type, subst),
-                )
-            }
-            Constraint::IsCallable(func, args, ret) => {
-                Constraint::IsCallable(
-                    self.apply_substitution(func, subst),
-                    args.iter().map(|a| self.apply_substitution(a, subst)).collect(),
-                    self.apply_substitution(ret, subst),
-                )
-            }
-            Constraint::IsIterable(container, element) => {
-                Constraint::IsIterable(
-                    self.apply_substitution(container, subst),
-                    self.apply_substitution(element, subst),
-                )
-            }
-        }
-    }
-    
-    /// Solve HasField constraint
-    fn solve_has_field_constraint(
-        &mut self,
-        obj_type: InferType,
-        field_name: String,
-        field_type: InferType,
-        subst: &mut Substitution,
-        work_queue: &mut VecDeque<Constraint>,
-    ) -> Result<(), TypeError> {
-        match obj_type {
-            InferType::Object { fields, .. } => {
-                if let Some(actual_field_type) = fields.get(&field_name) {
-                    work_queue.push_back(Constraint::Equal(field_type, actual_field_type.clone()));
-                } else {
-                    return Err(TypeError::FieldNotFound(field_name));
-                }
-            }
-            InferType::Var(v) => {
-                // Create object type with this field
-                let mut fields = HashMap::new();
-                fields.insert(field_name, field_type);
-                
-                let obj_type = InferType::Object {
-                    name: format!("Inferred_{}", v.0),
-                    fields,
-                    methods: HashMap::new(),
-                    is_actor: false,
-                    is_store: false,
-                };
-                
-                subst.insert(v, obj_type);
-            }
-            _ => return Err(TypeError::NotAnObject(obj_type)),
-        }
-        
-        Ok(())
-    }
-    
-    /// Solve HasMethod constraint
-    fn solve_has_method_constraint(
-        &mut self,
-        obj_type: InferType,
-        method_name: String,
-        method_type: InferType,
-        subst: &mut Substitution,
-        work_queue: &mut VecDeque<Constraint>,
-    ) -> Result<(), TypeError> {
-        match obj_type {
-            InferType::Object { methods, .. } => {
-                if let Some(actual_method_type) = methods.get(&method_name) {
-                    work_queue.push_back(Constraint::Equal(method_type, actual_method_type.clone()));
-                } else {
-                    return Err(TypeError::MethodNotFound(method_name));
-                }
-            }
-            InferType::Var(v) => {
-                // Create object type with this method
-                let mut methods = HashMap::new();
-                methods.insert(method_name, method_type);
-                
-                let obj_type = InferType::Object {
-                    name: format!("Inferred_{}", v.0),
-                    fields: HashMap::new(),
-                    methods,
-                    is_actor: false,
-                    is_store: false,
-                };
-                
-                subst.insert(v, obj_type);
-            }
-            _ => return Err(TypeError::NotAnObject(obj_type)),
-        }
-        
-        Ok(())
-    }
-    
-    /// Solve IsCallable constraint
-    fn solve_callable_constraint(
-        &mut self,
-        func_type: InferType,
-        arg_types: Vec<InferType>,
-        return_type: InferType,
-        subst: &mut Substitution,
-        work_queue: &mut VecDeque<Constraint>,
-    ) -> Result<(), TypeError> {
-        match func_type {
-            InferType::Function { params, return_type: func_return, .. } => {
-                if params.len() != arg_types.len() {
-                    return Err(TypeError::ArityMismatch(params.len(), arg_types.len()));
-                }
-                
-                // Unify parameters
-                for (param, arg) in params.iter().zip(arg_types.iter()) {
-                    work_queue.push_back(Constraint::Equal(param.clone(), arg.clone()));
-                }
-                
-                // Unify return type
-                work_queue.push_back(Constraint::Equal(*func_return, return_type));
-            }
-            InferType::Var(v) => {
-                // Create function type
-                let func_type = InferType::Function {
-                    params: arg_types,
-                    return_type: Box::new(return_type),
-                    effects: EffectSet::pure(),
-                };
-                
-                subst.insert(v, func_type);
-            }
-            _ => return Err(TypeError::NotCallable(func_type)),
-        }
-        
-        Ok(())
-    }
-    
-    /// Solve IsIterable constraint
-    fn solve_iterable_constraint(
-        &mut self,
-        container_type: InferType,
-        element_type: InferType,
-        subst: &mut Substitution,
-        work_queue: &mut VecDeque<Constraint>,
-    ) -> Result<(), TypeError> {
-        match container_type {
-            InferType::List(inner) => {
-                work_queue.push_back(Constraint::Equal(*inner, element_type));
-            }
-            InferType::Iterator(inner) => {
-                work_queue.push_back(Constraint::Equal(*inner, element_type));
-            }
-            InferType::Var(v) => {
-                // Assume it's a list
-                let list_type = InferType::List(Box::new(element_type));
-                subst.insert(v, list_type);
-            }
-            _ => return Err(TypeError::NotIterable(container_type)),
-        }
-        
-        Ok(())
-    }
-    
-    /// Apply final substitutions to the program AST
-    fn apply_substitutions_to_program(
-        &self,
-        program: &mut Program,
-        subst: &Substitution,
-    ) -> Result<(), TypeError> {
-        // Create an AST mutation visitor to update types
-        let mut type_updater = TypeUpdater {
-            resolver: self,
-            substitution: subst,
-        };
-        
-        type_updater.visit_program_mut(program);
-        Ok(())
-    }
-}
-
-/// AST visitor for updating types after inference
-struct TypeUpdater<'a> {
-    resolver: &'a TypeResolver,
-    substitution: &'a Substitution,
-}
-
-impl<'a> TypeUpdater<'a> {
-    fn update_type(&self, ast_type: &mut Type) {
-        // Convert AST type to InferType, apply substitution, convert back
-        if let Ok(infer_type) = self.resolver.ast_type_to_infer_type_readonly(ast_type) {
-            let substituted = self.resolver.apply_substitution(&infer_type, self.substitution);
-            *ast_type = self.resolver.infer_type_to_ast_type(&substituted);
-        }
-    }
-}
-
-impl<'a> VisitorMut for TypeUpdater<'a> {
-    fn visit_program_mut(&mut self, program: &mut Program) {
-        for stmt in &mut program.statements {
-            self.visit_stmt_mut(stmt);
-        }
-    }
-    
-    fn visit_stmt_mut(&mut self, stmt: &mut Stmt) {
-        match &mut stmt.kind {
-            StmtKind::Assignment { target, value } => {
-                self.visit_expr_mut(target);
-                self.visit_expr_mut(value);
-            }
-            
-            StmtKind::Function { params, return_type, body, .. } => {
-                for param in params {
-                    self.update_type(&mut param.type_);
-                    if let Some(default) = &mut param.default_value {
-                        self.visit_expr_mut(default);
-                    }
-                }
-                
-                if let Some(ret_type) = return_type {
-                    self.update_type(ret_type);
-                }
-                
-                for body_stmt in body {
-                    self.visit_stmt_mut(body_stmt);
-                }
-            }
-            
-            StmtKind::Object { fields, methods, .. } => {
-                for field in fields {
-                    self.update_type(&mut field.type_);
-                    if let Some(default) = &mut field.default_value {
-                        self.visit_expr_mut(default);
-                    }
-                }
-                
-                for method in methods {
-                    for param in &mut method.params {
-                        self.update_type(&mut param.type_);
-                    }
-                    for body_stmt in &mut method.body {
-                        self.visit_stmt_mut(body_stmt);
-                    }
-                }
-            }
-            
-            StmtKind::Store { value_type, initial_value, .. } => {
-                self.update_type(value_type);
-                if let Some(init) = initial_value {
-                    self.visit_expr_mut(init);
-                }
-            }
-            
-            StmtKind::Actor { handlers, .. } => {
-                for handler in handlers {
-                    for body_stmt in &mut handler.body {
-                        self.visit_stmt_mut(body_stmt);
-                    }
-                }
-            }
-            
-            StmtKind::If { condition, then_branch, else_branch } => {
-                self.visit_expr_mut(condition);
-                for stmt in then_branch {
-                    self.visit_stmt_mut(stmt);
-                }
-                if let Some(else_stmts) = else_branch {
-                    for stmt in else_stmts {
-                        self.visit_stmt_mut(stmt);
-                    }
-                }
-            }
-            
-            StmtKind::For { iterable, body, .. } => {
-                self.visit_expr_mut(iterable);
-                for stmt in body {
-                    self.visit_stmt_mut(stmt);
-                }
-            }
-            
-            StmtKind::While { condition, body } => {
-                self.visit_expr_mut(condition);
-                for stmt in body {
-                    self.visit_stmt_mut(stmt);
-                }
-            }
-            
-            StmtKind::Return(expr) => {
-                if let Some(return_expr) = expr {
-                    self.visit_expr_mut(return_expr);
-                }
-            }
-            
-            StmtKind::Expression(expr) => {
-                self.visit_expr_mut(expr);
-            }
-            
-            _ => {}
-        }
-    }
-    
-    fn visit_expr_mut(&mut self, expr: &mut Expr) {
-        match &mut expr.kind {
-            ExprKind::Binary { left, right, .. } => {
-                self.visit_expr_mut(left);
-                self.visit_expr_mut(right);
-            }
-            
-            ExprKind::Unary { operand, .. } => {
-                self.visit_expr_mut(operand);
-            }
-            
-            ExprKind::Call { callee, args } => {
-                self.visit_expr_mut(callee);
-                for arg in args {
-                    self.visit_expr_mut(arg);
-                }
-            }
-            
-            ExprKind::Index { object, index } => {
-                self.visit_expr_mut(object);
-                self.visit_expr_mut(index);
-            }
-            
-            ExprKind::FieldAccess { object, .. } => {
-                self.visit_expr_mut(object);
-            }
-            
-            ExprKind::ListLiteral(elements) => {
-                for elem in elements {
-                    self.visit_expr_mut(elem);
-                }
-            }
-            
-            ExprKind::MapLiteral(pairs) => {
-                for (key, value) in pairs {
-                    self.visit_expr_mut(key);
-                    self.visit_expr_mut(value);
-                }
-            }
-            
-            ExprKind::StringInterpolation { parts } => {
-                for part in parts {
-                    if let crate::ast::StringPart::Expression(expr) = part {
-                        self.visit_expr_mut(expr);
-                    }
-                }
-            }
-            
-            ExprKind::If { condition, then_branch, else_branch } => {
-                self.visit_expr_mut(condition);
-                self.visit_expr_mut(then_branch);
-                if let Some(else_expr) = else_branch {
-                    self.visit_expr_mut(else_expr);
-                }
-            }
-            
-            ExprKind::Block(stmts) => {
-                for stmt in stmts {
-                    self.visit_stmt_mut(stmt);
-                }
-            }
-            
-            ExprKind::Lambda { params, body } => {
-                for param in params {
-                    self.update_type(&mut param.type_);
-                }
-                self.visit_expr_mut(body);
-            }
-            
-            ExprKind::ListAppend { list, element } => {
-                self.visit_expr_mut(list);
-                self.visit_expr_mut(element);
-            }
-            
-            _ => {}
-        }
-    }
-    
-    fn visit_type_mut(&mut self, type_: &mut Type) {
-        self.update_type(type_);
-    }
-}
-
-impl TypeResolver {
-    /// Read-only version of ast_type_to_infer_type for the visitor
-    pub fn ast_type_to_infer_type_readonly(&self, ast_type: &Type) -> Result<InferType, TypeError> {
-        match ast_type {
-            Type::I8 | Type::I16 | Type::I32 | Type::I64 => Ok(InferType::Int),
-            Type::F32 | Type::F64 => Ok(InferType::Float),
-            Type::String => Ok(InferType::String),
-            Type::Bool => Ok(InferType::Bool),
-            Type::Unit => Ok(InferType::Unit),
-            Type::List(inner) => {
-                let inner_type = self.ast_type_to_infer_type_readonly(inner)?;
-                Ok(InferType::List(Box::new(inner_type)))
-            }
-            Type::Map(key, value) => {
-                let key_type = self.ast_type_to_infer_type_readonly(key)?;
-                let value_type = self.ast_type_to_infer_type_readonly(value)?;
-                Ok(InferType::Map(Box::new(key_type), Box::new(value_type)))
-            }
-            Type::Function { params, return_type } => {
-                let param_types: Result<Vec<_>, _> = params.iter()
-                    .map(|p| self.ast_type_to_infer_type_readonly(p))
-                    .collect();
-                let return_infer_type = self.ast_type_to_infer_type_readonly(return_type)?;
-                
-                Ok(InferType::Function {
-                    params: param_types?,
-                    return_type: Box::new(return_infer_type),
-                    effects: EffectSet::pure(),
-                })
-            }
-            Type::Object { name, .. } | Type::Store { name, .. } | Type::Actor { name, .. } => {
-                // Look up in our type definitions
-                if let Some(obj_type) = self.object_definitions.get(name) {
-                    Ok(obj_type.clone())
-                } else if let Some(store_type) = self.store_types.get(name) {
-                    Ok(store_type.clone())
-                } else if let Some(actor_type) = self.actor_types.get(name) {
-                    Ok(actor_type.clone())
-                } else {
-                    Ok(InferType::Unknown)
-                }
-            }
-            Type::TypeVar(id) => Ok(InferType::Var(TypeVar(*id as usize))),
-            Type::Result(ok, err) => {
-                let ok_type = self.ast_type_to_infer_type_readonly(ok)?;
-                let err_type = self.ast_type_to_infer_type_readonly(err)?;
-                Ok(InferType::Result(Box::new(ok_type), Box::new(err_type)))
-            }
-            Type::Unknown => Ok(InferType::Unknown),
-        }
     }
 }

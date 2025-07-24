@@ -22,6 +22,7 @@ pub enum TokenType {
     Use,
     Mod,
     If,
+    Then,
     Else,
     While,
     For,
@@ -34,6 +35,9 @@ pub enum TokenType {
     Break,
     Continue,
     Import,
+    From,
+    To,
+    Nocopy,
     Err,
     No,
     Yes,
@@ -53,6 +57,11 @@ pub enum TokenType {
     GreaterEqual,  // >=
     And,           // and
     Or,            // or
+    Equals,        // equals
+    Gt,            // gt
+    Gte,           // gte
+    Lt,            // lt
+    Lte,           // lte
     LogicalAnd,    // &&
     LogicalOr,     // ||
     Bang,          // !
@@ -76,6 +85,8 @@ pub enum TokenType {
     RightBrace,    // }
     LeftBracket,   // [
     RightBracket,  // ]
+    PipeKeyword,   // pipe
+    IoKeyword,     // io
     
     // Special
     Newline,
@@ -131,6 +142,7 @@ impl Lexer {
         keywords.insert("use".to_string(), TokenType::Use);
         keywords.insert("mod".to_string(), TokenType::Mod);
         keywords.insert("if".to_string(), TokenType::If);
+        keywords.insert("then".to_string(), TokenType::Then);
         keywords.insert("else".to_string(), TokenType::Else);
         keywords.insert("while".to_string(), TokenType::While);
         keywords.insert("for".to_string(), TokenType::For);
@@ -143,6 +155,9 @@ impl Lexer {
         keywords.insert("break".to_string(), TokenType::Break);
         keywords.insert("continue".to_string(), TokenType::Continue);
         keywords.insert("import".to_string(), TokenType::Import);
+        keywords.insert("from".to_string(), TokenType::From);
+        keywords.insert("to".to_string(), TokenType::To);
+        keywords.insert("nocopy".to_string(), TokenType::Nocopy);
         keywords.insert("err".to_string(), TokenType::Err);
         keywords.insert("no".to_string(), TokenType::No);
         keywords.insert("yes".to_string(), TokenType::Yes);
@@ -151,7 +166,14 @@ impl Lexer {
         keywords.insert("true".to_string(), TokenType::True);
         keywords.insert("false".to_string(), TokenType::False);
         keywords.insert("and".to_string(), TokenType::And);
-        keywords.insert("or".to_string(), TokenType::Or);
+        keywords.insert("or", TokenType::Or);
+        keywords.insert("equals", TokenType::Equals);
+        keywords.insert("gt", TokenType::Gt);
+        keywords.insert("gte", TokenType::Gte);
+        keywords.insert("lt", TokenType::Lt);
+        keywords.insert("lte", TokenType::Lte);
+        keywords.insert("pipe", TokenType::PipeKeyword);
+        keywords.insert("io".to_string(), TokenType::IoKeyword);
         
         Self {
             input: chars,
@@ -675,8 +697,9 @@ impl fmt::Display for TokenType {
             TokenType::Actor => write!(f, "Actor"),
             TokenType::Use => write!(f, "Use"),
             TokenType::Mod => write!(f, "Mod"),
-            TokenType::If => write!(f, "If"),
-            TokenType::Else => write!(f, "Else"),
+            TokenType::If => write!(f, "if"),
+            TokenType::Then => write!(f, "then"),
+            TokenType::Else => write!(f, "else"),
             TokenType::While => write!(f, "While"),
             TokenType::For => write!(f, "For"),
             TokenType::In => write!(f, "In"),
@@ -735,6 +758,11 @@ impl fmt::Display for TokenType {
             TokenType::Dedent => write!(f, "Dedent"),
             TokenType::Error => write!(f, "Error"),
             TokenType::Eof => write!(f, "EOF"),
+            TokenType::PipeKeyword => write!(f, "pipe"),
+            TokenType::IoKeyword => write!(f, "io"),
+            TokenType::From => write!(f, "from"),
+            TokenType::To => write!(f, "to"),
+            TokenType::Nocopy => write!(f, "nocopy"),
         }
     }
 }

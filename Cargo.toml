@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "coral-llvm"
 path = "src/main_llvm_demo.rs"
 
+[[bin]]
+name = "test-runner"
+path = "src/test_runner.rs"
+
 [lib]
 name = "coral"
 path = "src/lib.rs"

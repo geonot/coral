@@ -1,0 +1,9 @@
+PARSER VALIDATION SUITE
+-------------------------
+
+This file serves as a placeholder. In a full compiler test, this would
+contain the expected output (e.g., formatted AST, generated IR, or
+program execution result) for the corresponding .cor file.
+
+For now, its presence confirms that the test runner can find and pair
+the test source with its expected outcome.

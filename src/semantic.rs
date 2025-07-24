@@ -1,10 +1,13 @@
 use crate::ast::*;
 use std::collections::HashMap;
+use crate::codegen::{LLVMValue, LLVMFunction};
 
 /// Symbol table for tracking variable and function declarations
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SymbolTable {
     scopes: Vec<HashMap<String, Symbol>>,
+    pub functions: HashMap<String, LLVMFunction>,
+    pub variables: HashMap<String, LLVMValue>,
 }
 
 /// Symbol information
@@ -30,7 +33,16 @@ impl SymbolTable {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()], // Start with global scope
+            functions: HashMap::new(),
+            variables: HashMap::new(),
         }
+    }
+
+    pub fn with_parent(parent: Self) -> Self {
+        let mut new_table = Self::new();
+        new_table.scopes = parent.scopes;
+        new_table.enter_scope();
+        new_table
     }
     
     pub fn enter_scope(&mut self) {
@@ -59,6 +71,22 @@ impl SymbolTable {
             }
         }
         None
+    }
+
+    pub fn define_variable(&mut self, name: String, value: LLVMValue) {
+        self.variables.insert(name, value);
+    }
+
+    pub fn lookup_variable(&self, name: &str) -> Option<&LLVMValue> {
+        self.variables.get(name)
+    }
+
+    pub fn define_function(&mut self, name: String, func: LLVMFunction) {
+        self.functions.insert(name, func);
+    }
+
+    pub fn lookup_function(&self, name: &str) -> Option<&LLVMFunction> {
+        self.functions.get(name)
     }
 }
 
@@ -606,10 +634,48 @@ impl SemanticAnalyzer {
         match (actual, expected) {
             (Type::Unknown, _) | (_, Type::Unknown) => true,
             (a, b) if a == b => true,
+            // Widening conversions for integers
             (Type::I8, Type::I16) | (Type::I8, Type::I32) | (Type::I8, Type::I64) => true,
             (Type::I16, Type::I32) | (Type::I16, Type::I64) => true,
             (Type::I32, Type::I64) => true,
+            // Widening conversions for floats
             (Type::F32, Type::F64) => true,
+            // Integer to float conversion
+            (Type::I8, Type::F32) | (Type::I8, Type::F64) => true,
+            (Type::I16, Type::F32) | (Type::I16, Type::F64) => true,
+            (Type::I32, Type::F32) | (Type::I32, Type::F64) => true,
+            (Type::I64, Type::F32) | (Type::I64, Type::F64) => true,
+            // List compatibility (covariant)
+            (Type::List(actual_inner), Type::List(expected_inner)) => {
+                self.types_compatible(actual_inner, expected_inner)
+            }
+            // Map compatibility (covariant values, invariant keys for now)
+            (Type::Map(actual_key, actual_value), Type::Map(expected_key, expected_value)) => {
+                self.types_compatible(actual_key, expected_key) && self.types_compatible(actual_value, expected_value)
+            }
+            // Function compatibility (contravariant parameters, covariant return)
+            (Type::Function { params: actual_params, return_type: actual_return },
+             Type::Function { params: expected_params, return_type: expected_return }) => {
+                if actual_params.len() != expected_params.len() { return false; }
+                let params_compatible = actual_params.iter().zip(expected_params.iter()).all(|(a, e)| {
+                    // Contravariant: expected parameter type must be compatible with actual
+                    self.types_compatible(e, a)
+                });
+                let return_compatible = self.types_compatible(actual_return, expected_return);
+                params_compatible && return_compatible
+            }
+            // Object subtyping (structural)
+            (Type::Object { fields: actual_fields, .. }, Type::Object { fields: expected_fields, .. }) => {
+                expected_fields.iter().all(|(name, expected_type)| {
+                    actual_fields.get(name).map_or(false, |actual_type| {
+                        self.types_compatible(actual_type, expected_type)
+                    })
+                })
+            }
+            // Result type compatibility
+            (Type::Result(actual_ok, actual_err), Type::Result(expected_ok, expected_err)) => {
+                self.types_compatible(actual_ok, expected_ok) && self.types_compatible(actual_err, expected_err)
+            }
             _ => false,
         }
     }

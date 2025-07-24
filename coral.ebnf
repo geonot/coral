@@ -43,14 +43,13 @@ logical_or_expression = logical_and_expression , { 'or' , logical_and_expression
 
 logical_and_expression = comparison_expression , { 'and' , comparison_expression } ;
 
-comparison_expression = additive_expression , { ( '=' | 'equals' | '>' | '>=' | '<' | '<=' | 'gt' | 'gte' | 'lt' | 'lte' ) , additive_expression } ;
+comparison_expression = additive_expression , { ( 'equals' | 'not equals' | 'gt' | 'gte' | 'lt' | 'lte' ) , additive_expression } ;
 
 additive_expression = multiplicative_expression , { ( '+' | '-' ) , multiplicative_expression } ;
 
 multiplicative_expression = unary_expression , { ( '*' | '/' | '%' ) , unary_expression } ;
 
 unary_expression = [ '-' | 'not' ] , value_or_invocation ;
-postfix_bang_suffix = '!' ;
 
 // A primary expression followed by any mix of property accesses, list accesses, calls, or bangs
 value_or_invocation = primary_expression_base , { postfix_operation }* ;
@@ -58,6 +57,7 @@ value_or_invocation = primary_expression_base , { postfix_operation }* ;
 postfix_operation = property_access_suffix 
                   | list_element_access_suffix 
                   | call_operation 
+                  | across_suffix
                   | postfix_bang_suffix ;
 
 primary_expression_base = IDENTIFIER
@@ -74,6 +74,7 @@ parameter_reference = '$' , [ IDENTIFIER | INTEGER_LITERAL ] ;
 property_access_suffix = '.' , IDENTIFIER ;
 list_element_access_suffix = '[' , expression , ']' ;
 call_operation = '(' , [ argument_list ] , ')' ;
+across_suffix = '.' , 'across' , '(' , expression , ')' , [ '.' , 'into' , '(' , IDENTIFIER , ')' ] ;
 postfix_bang_suffix = '!' ;
 
 argument_list = argument , { ',' , argument } ;
@@ -93,9 +94,9 @@ string_part = STRING_CONTENT | '{' , expression , '}' ;
 map_block_assignment_rhs = NEWLINE , INDENT , { map_block_entry } , DEDENT ;
 map_block_entry = IDENTIFIER , 'is' , expression , NEWLINE ;
 
-function_definition = 'fn' , IDENTIFIER , [ function_parameters ] , function_body ;
+function_definition = 'fn' , IDENTIFIER , function_parameters , function_body ;
 function_parameters = '(' , [ parameter_definition , { ',' , parameter_definition } ] , ')' ;
-parameter_definition = IDENTIFIER , [ ':' , type_specifier ] , [ expression ] ;
+parameter_definition = IDENTIFIER , [ ':' , type_specifier ] , [ '?' , expression ] ;
 
 function_body = ( expression , NEWLINE )
               | ( NEWLINE , INDENT , { statement } , [ [ 'return' ] , expression , NEWLINE ] , DEDENT )
@@ -156,6 +157,6 @@ user_type = IDENTIFIER ;
 (* Lexical Tokens:
    IDENTIFIER, STRING_LITERAL, INTEGER_LITERAL, FLOAT_LITERAL, STRING_CONTENT,
    NEWLINE, INDENT, DEDENT, EOF,
-   Keywords: 'is', 'fn', 'true', 'false', 'yes', 'no', 'if', 'else', 'unless', 'while', 'until', 'iterate', 'return', 'break', 'continue', 'log', 'mod', 'use', 'object', 'store', 'actor', 'empty', 'now', 'or', 'and', 'not', 'equals', 'gt', 'gte', 'lt', 'lte', 'as', 'for', 'err', 'with', 'across', 'into', 'make',
-   Symbols: '.', '(', ')', ',', ':', '+', '-', '*', '/', '%', '=', '>', '>=', '<', '<=', '?', '!', '&', '@', '{', '}', '\'', '$'
+   Keywords: 'is', 'fn', 'true', 'false', 'yes', 'no', 'if', 'else', 'unless', 'while', 'until', 'iterate', 'return', 'break', 'continue', 'log', 'mod', 'use', 'object', 'store', 'actor', 'empty', 'now', 'or', 'and', 'not', 'equals', 'not equals', 'gt', 'gte', 'lt', 'lte', 'as', 'for', 'err', 'with', 'across', 'into', 'make',
+   Symbols: '.', '(', ')', ',', ':', '+', '-', '*', '/', '%', '>', '>=', '<', '<=', '?', '!', '&', '@', '{', '}', '\'', '$'
 *)

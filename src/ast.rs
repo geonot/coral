@@ -46,7 +46,7 @@ impl NodeId {
 }
 
 /// Comprehensive type system for Coral
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub enum Type {
     // Primitive types
     I8, I16, I32, I64,
@@ -83,12 +83,101 @@ pub enum Type {
     
     // Result type for error handling
     Result(Box<Type>, Box<Type>),
+
+    Pipe(Box<Type>),
     
     // Unit type
     Unit,
     
     // Unknown type (for inference)
     Unknown,
+}
+
+use std::hash::{Hash, Hasher};
+
+impl Hash for Type {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Type::I8 => "i8".hash(state),
+            Type::I16 => "i16".hash(state),
+            Type::I32 => "i32".hash(state),
+            Type::I64 => "i64".hash(state),
+            Type::F32 => "f32".hash(state),
+            Type::F64 => "f64".hash(state),
+            Type::Bool => "bool".hash(state),
+            Type::String => "string".hash(state),
+            Type::Unit => "unit".hash(state),
+            Type::List(t) => {
+                "list".hash(state);
+                t.hash(state);
+            }
+            Type::Map(k, v) => {
+                "map".hash(state);
+                k.hash(state);
+                v.hash(state);
+            }
+            Type::Function { params, return_type } => {
+                "function".hash(state);
+                params.hash(state);
+                return_type.hash(state);
+            }
+            Type::Object { name, .. } => {
+                "object".hash(state);
+                name.hash(state);
+            }
+            Type::Store { name, .. } => {
+                "store".hash(state);
+                name.hash(state);
+            }
+            Type::Actor { name, .. } => {
+                "actor".hash(state);
+                name.hash(state);
+            }
+            Type::TypeVar(id) => {
+                "typevar".hash(state);
+                id.hash(state);
+            }
+            Type::Result(o, e) => {
+                "result".hash(state);
+                o.hash(state);
+                e.hash(state);
+            }
+            Type::Pipe(t) => {
+                "pipe".hash(state);
+                t.hash(state);
+            }
+            Type::Unknown => "unknown".hash(state),
+        }
+    }
+}
+
+impl PartialEq for Type {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Type::I8, Type::I8) => true,
+            (Type::I16, Type::I16) => true,
+            (Type::I32, Type::I32) => true,
+            (Type::I64, Type::I64) => true,
+            (Type::F32, Type::F32) => true,
+            (Type::F64, Type::F64) => true,
+            (Type::Bool, Type::Bool) => true,
+            (Type::String, Type::String) => true,
+            (Type::Unit, Type::Unit) => true,
+            (Type::List(a), Type::List(b)) => a == b,
+            (Type::Map(k1, v1), Type::Map(k2, v2)) => k1 == k2 && v1 == v2,
+            (Type::Function { params: p1, return_type: r1 }, Type::Function { params: p2, return_type: r2 }) => {
+                p1 == p2 && r1 == r2
+            }
+            (Type::Object { name: n1, .. }, Type::Object { name: n2, .. }) => n1 == n2,
+            (Type::Store { name: n1, .. }, Type::Store { name: n2, .. }) => n1 == n2,
+            (Type::Actor { name: n1, .. }, Type::Actor { name: n2, .. }) => n1 == n2,
+            (Type::TypeVar(id1), Type::TypeVar(id2)) => id1 == id2,
+            (Type::Result(o1, e1), Type::Result(o2, e2)) => o1 == o2 && e1 == e2,
+            (Type::Pipe(t1), Type::Pipe(t2)) => t1 == t2,
+            (Type::Unknown, Type::Unknown) => true,
+            _ => false,
+        }
+    }
 }
 
 impl Type {
@@ -167,6 +256,7 @@ impl Type {
             Type::Actor { name, .. } => format!("actor {}", name),
             Type::TypeVar(id) => format!("T{}", id),
             Type::Result(ok, err) => format!("Result<{}, {}>", ok.to_string(), err.to_string()),
+            Type::Pipe(inner) => format!("pipe<{}>", inner.to_string()),
             Type::Unit => "unit".to_string(),
             Type::Unknown => "unknown".to_string(),
         }
@@ -199,6 +289,7 @@ impl fmt::Display for Type {
             Type::Actor { name, .. } => write!(f, "actor {}", name),
             Type::TypeVar(id) => write!(f, "T{}", id),
             Type::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
+            Type::Pipe(inner) => write!(f, "pipe<{}>", inner),
             Type::Unit => write!(f, "unit"),
             Type::Unknown => write!(f, "unknown"),
         }
@@ -286,7 +377,7 @@ pub enum ExprKind {
     },
     Call {
         callee: Box<Expr>,
-        args: Vec<Expr>,
+        args: Vec<Argument>,
     },
     Index {
         object: Box<Expr>,
@@ -306,6 +397,11 @@ pub enum ExprKind {
         map: Box<Expr>,
         key: Box<Expr>,
         value: Box<Expr>,
+    },
+    Across {
+        callee: Box<Expr>,
+        iterable: Box<Expr>,
+        into: Option<String>,
     },
     StringInterpolation {
         // For 'hello {name}' -> parts: ["hello ", name_expr, ""]
@@ -382,11 +478,6 @@ pub enum StmtKind {
         condition: Expr,
         body: Vec<Stmt>,
     },
-    For {
-        variable: String,
-        iterable: Expr,
-        body: Vec<Stmt>,
-    },
     Iterate {
         iterable: Expr,
         body: Vec<Stmt>,
@@ -407,8 +498,8 @@ pub enum StmtKind {
     },
     Store {
         name: String,
-        value_type: Type,
-        initial_value: Option<Expr>,
+        fields: Vec<Field>,
+        methods: Vec<ObjectMethod>,
     },
     Actor {
         name: String,
@@ -422,6 +513,17 @@ pub enum StmtKind {
     ErrorHandler {
         handler: ErrorHandler,
         inner: Box<Stmt>, // The statement/expression being guarded
+    },
+    Pipe {
+        name: String,
+        source: String,
+        destination: String,
+        nocopy: bool,
+    },
+    Io {
+        op: String,
+        args: Vec<Expr>,
+        nocopy: bool,
     },
 }
 
@@ -448,6 +550,14 @@ pub enum ErrorAction {
     Log(Option<Expr>),      // log or log expr
     Return(Option<Expr>),   // return or return expr
     Custom(Expr),           // custom error handler expression
+}
+
+/// An argument passed in a function call
+#[derive(Debug, Clone, PartialEq)]
+pub struct Argument {
+    pub name: Option<String>,
+    pub value: Expr,
+    pub span: SourceSpan,
 }
 
 /// Function parameter with optional default value
@@ -527,11 +637,17 @@ impl ExprKind {
         }
     }
     
-    pub fn call(callee: Expr, args: Vec<Expr>) -> Self {
+    pub fn call(callee: Expr, args: Vec<Argument>) -> Self {
         ExprKind::Call {
             callee: Box::new(callee),
             args,
         }
+    }
+}
+
+impl From<Literal> for ExprKind {
+    fn from(lit: Literal) -> Self {
+        ExprKind::Literal(lit)
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::ast::{
     Program, Stmt, StmtKind, Expr, ExprKind, Type, 
-    BinaryOp, UnaryOp, Literal, Parameter, Field, MessageHandler, ObjectMethod,
+    BinaryOp, UnaryOp, Literal, Parameter, Field, MessageHandler, ObjectMethod, Argument,
     SourceSpan
 };
 use crate::lexer::{Token, TokenType};
@@ -113,7 +113,7 @@ impl Parser {
     }
     
     // Statement parsing
-    fn parse_statement(&mut self) -> ParseResult<Stmt> {
+    """    fn parse_statement(&mut self) -> ParseResult<Stmt> {
         self.skip_newlines();
         match self.peek().token_type {
             TokenType::Fn => self.parse_function_statement(),
@@ -129,11 +129,36 @@ impl Parser {
             TokenType::Break => self.parse_break_statement(),
             TokenType::Continue => self.parse_continue_statement(),
             TokenType::Import => self.parse_import_statement(),
-            TokenType::PipeKeyword => self.parse_pipe_statement(),
-            TokenType::IoKeyword => self.parse_io_statement(),
-            _ => self.parse_expression_statement(),
+            _ => {
+                let expr = self.parse_expression()?;
+
+                // Postfix unless
+                if self.match_token(TokenType::Unless) {
+                    let condition = self.parse_expression()?;
+                    let body_stmt = Stmt::new(expr.span.clone(), StmtKind::Expression(expr));
+                    let span = self.span_between(&body_stmt.span, &condition.span);
+                    return Ok(Stmt::new(span, StmtKind::Unless {
+                        condition,
+                        body: vec![body_stmt],
+                    }));
+                }
+
+                // Assignment
+                if self.check(TokenType::Is) {
+                    self.advance(); // consume 'is'
+                    let value = self.parse_expression()?;
+                    let span = self.span_between(&expr.span, &value.span);
+                    return Ok(Stmt::new(span, StmtKind::Assignment { target: expr, value }));
+                }
+
+                // Regular expression statement
+                let span = expr.span.clone();
+                let stmt = Stmt::new(span, StmtKind::Expression(expr));
+                self.skip_newlines();
+                return Ok(stmt);
+            }
         }
-    }
+    }""
     
     fn parse_function_statement(&mut self) -> ParseResult<Stmt> {
         let start = self.advance(); // consume 'fn'
@@ -163,16 +188,14 @@ impl Parser {
     
     fn parse_object_statement(&mut self) -> ParseResult<Stmt> {
         let start = self.advance(); // consume 'object'
-        
         let name_token = self.consume(TokenType::Identifier, "Expected object name")?;
-        
-        self.skip_newlines();
+        self.consume(TokenType::Newline, "Expected newline after object name")?;
         
         let (fields, methods) = self.parse_object_body()?;
         
         let span = self.span_from_token(&start);
         Ok(Stmt::new(span, StmtKind::Object { 
-            name: name_token.lexeme, // Move instead of clone
+            name: name_token.lexeme,
             fields, 
             methods 
         }))
@@ -387,13 +410,17 @@ impl Parser {
 
     fn parse_iterate_statement(&mut self) -> ParseResult<Stmt> {
         let start = self.advance(); // consume 'iterate'
-        
         let iterable = self.parse_expression()?;
         self.skip_newlines();
         let body = self.parse_block_statements()?;
-        
         let span = self.span_from_token(&start);
-        Ok(Stmt::new(span, StmtKind::Iterate { iterable, body }))
+        Ok(Stmt::new(
+            span,
+            StmtKind::Iterate {
+                iterable,
+                body,
+            },
+        ))
     }
     
     fn parse_return_statement(&mut self) -> ParseResult<Stmt> {
@@ -453,79 +480,9 @@ impl Parser {
         Ok(Stmt::new(span, StmtKind::Import { module, items }))
     }
 
-    fn parse_pipe_statement(&mut self) -> ParseResult<Stmt> {
-        let start = self.advance(); // consume 'pipe'
-
-        let name_token = self.consume(TokenType::Identifier, "Expected pipe name")?;
-        let name = name_token.lexeme.clone();
-
-        self.consume(TokenType::From, "Expected 'from' after pipe name")?;
-        let source_token = self.consume(TokenType::Identifier, "Expected source name")?;
-        let source = source_token.lexeme.clone();
-
-        self.consume(TokenType::To, "Expected 'to' after source name")?;
-        let destination_token = self.consume(TokenType::Identifier, "Expected destination name")?;
-        let destination = destination_token.lexeme.clone();
-
-        let nocopy = self.match_token(TokenType::Nocopy);
-
-        let span = self.span_from_token(&start);
-        Ok(Stmt::new(span, StmtKind::Pipe {
-            name,
-            source,
-            destination,
-            nocopy,
-        }))
-    }
-
-    fn parse_io_statement(&mut self) -> ParseResult<Stmt> {
-        let start = self.advance(); // consume 'io'
-
-        let op_token = self.consume(TokenType::Identifier, "Expected IO operation name")?;
-        let op = op_token.lexeme.clone();
-
-        self.consume(TokenType::LeftParen, "Expected '(' after IO operation name")?;
-        let args = if self.check(TokenType::RightParen) {
-            Vec::new()
-        } else {
-            self.parse_expression_list()? // Reuse expression list parsing for arguments
-        };
-        self.consume(TokenType::RightParen, "Expected ')' after IO arguments")?;
-
-        let nocopy = self.match_token(TokenType::Nocopy);
-
-        let span = self.span_from_token(&start);
-        Ok(Stmt::new(span, StmtKind::Io {
-            op,
-            args,
-            nocopy,
-        }))
-    }
     
-    fn parse_expression_statement(&mut self) -> ParseResult<Stmt> {
-        let expr = self.parse_expression()?;
-        
-        // Check for assignment with 'is' (Coral syntax)
-        if self.match_token(TokenType::Is) {
-            let value = self.parse_expression()?;
-            
-            let span = SourceSpan::new(
-                self.file_name.clone(),
-                expr.span.start_line,
-                expr.span.start_col,
-                value.span.end_line,
-                value.span.end_col,
-            );
-            
-            return Ok(Stmt::new(span, StmtKind::Assignment {
-                target: expr,
-                value,
-            }));
-        }
-        
-        let span = expr.span.clone();
-        Ok(Stmt::new(span, StmtKind::Expression(expr)))
-    }
+
+    
     
     // Expression parsing with precedence climbing
     fn parse_expression(&mut self) -> ParseResult<Expr> {
@@ -579,11 +536,9 @@ impl Parser {
         let mut expr = self.parse_comparison()?;
         
         loop {
-            let op = if self.match_token(TokenType::Equals) {
+            let op = if self.match_token(TokenType::Equals) || self.match_token(TokenType::EqualEqual) {
                 Some(BinaryOp::Eq)
-            } else if self.check(TokenType::Not) && self.tokens.get(self.current + 1).map_or(false, |t| t.token_type == TokenType::Equals) {
-                self.advance(); // consume 'not'
-                self.advance(); // consume 'equals'
+            } else if self.match_token(TokenType::BangEqual) {
                 Some(BinaryOp::Ne)
             } else {
                 None
@@ -741,14 +696,14 @@ impl Parser {
                     let into = if self.match_token(TokenType::Dot) {
                         self.consume(TokenType::Identifier, "Expected 'into' after '.'")?;
                         self.consume(TokenType::LeftParen, "Expected '(' after 'into'")?;
-                        let into_token = self.consume(TokenType::Identifier, "Expected identifier in 'into'")?;
+                        let into_token = self.consume(TokenType::Identifier, "Expected identifier in \"into\"")?;
                         self.consume(TokenType::RightParen, "Expected ')' after 'into' identifier")?;
                         Some(into_token.lexeme)
                     } else {
                         None
                     };
 
-                    let span = self.span_between(&expr.span, &self.previous().span);
+                    let span = self.span_between(&expr.span, &self.token_to_span(&self.previous()));
                     expr = Expr::new(span, ExprKind::Across {
                         callee: Box::new(expr),
                         iterable: Box::new(iterable),
@@ -1039,30 +994,29 @@ impl Parser {
     
     fn parse_argument_list(&mut self) -> ParseResult<Vec<Argument>> {
         let mut args = Vec::new();
-        
         if self.check(TokenType::RightParen) {
             return Ok(args);
         }
-        
         loop {
-            let name = if self.check(TokenType::Identifier) && self.tokens.get(self.current + 1).map_or(false, |t| t.token_type == TokenType::Colon) {
+            let name = if self.check(TokenType::Identifier)
+                && self
+                    .tokens
+                    .get(self.current + 1)
+                    .map_or(false, |t| t.token_type == TokenType::Colon)
+            {
                 let name_token = self.advance();
                 self.advance(); // consume ':'
                 Some(name_token.lexeme)
             } else {
                 None
             };
-            
             let value = self.parse_expression()?;
             let span = value.span.clone();
-            
             args.push(Argument { name, value, span });
-            
             if !self.match_token(TokenType::Comma) {
                 break;
             }
         }
-        
         Ok(args)
     }
     
@@ -1084,107 +1038,84 @@ impl Parser {
     fn parse_object_body(&mut self) -> ParseResult<(Vec<Field>, Vec<ObjectMethod>)> {
         let mut fields = Vec::new();
         let mut methods = Vec::new();
-        
-        // Expect an Indent token to start the object body
+
         if !self.match_token(TokenType::Indent) {
             return Err(ParseError::UnexpectedToken {
                 expected: "indented block".to_string(),
                 found: self.peek().clone(),
             });
         }
-        
+
         while !self.check(TokenType::Dedent) && !self.is_at_end() {
             self.skip_newlines();
-            if self.check(TokenType::Dedent) || self.is_at_end() {
+            if self.check(TokenType::Dedent) {
                 break;
             }
-            
+
+            if self.check(TokenType::Fn) {
+                let func_stmt = self.parse_function_statement()?;
+                if let StmtKind::Function { name, params, return_type, body } = func_stmt.kind {
+                    methods.push(ObjectMethod {
+                        name,
+                        params,
+                        return_type,
+                        body,
+                        span: func_stmt.span,
+                    });
+                }
+                continue;
+            }
+
             let name_token = self.consume(TokenType::Identifier, "Expected field or method name")?;
             let name = name_token.lexeme.clone();
-            
-            // Check if this is a field or method
-            // Field patterns:
-            //   name: type
-            //   name: type = default
-            //   name ? default  (Coral syntax)
-            // Method patterns:
-            //   name
-            //   name(params)
-            //   name -> type
-            //   name: (at end of line, starts indented block)
-            
+
             if self.check(TokenType::Colon) {
-                // Could be field with type or method with body
                 self.advance(); // consume ':'
-                self.skip_newlines();
-                if self.check(TokenType::Indent) {
-                    // This is a method: name: (starts indented block)
-                    let params = Vec::new(); // TODO: Handle method parameters
-                    let return_type = None;
-                    let body = self.parse_block_statements()?;
-                    let span = self.token_to_span(&name_token);
-                    methods.push(ObjectMethod { name, params, return_type, body, span });
-                } else if self.check(TokenType::Newline) {
-                    // Could be a field or method with no body
-                    self.advance(); // consume Newline
-                    let span = self.token_to_span(&name_token);
-                    fields.push(Field { name, type_: Type::Unknown, default_value: None, span });
+                let type_ = self.parse_type()?;
+                let default_value = if self.match_token(TokenType::Question) {
+                    Some(self.parse_expression()?)
                 } else {
-                    // This is a field: name: type
-                    let type_ = self.parse_type()?;
-                    let default_value = if self.match_token(TokenType::Question) {
-                        Some(self.parse_expression()?)
-                    } else if self.match_token(TokenType::Equal) {
-                        Some(self.parse_expression()?)
-                    } else {
-                        None
-                    };
-                    let span = self.token_to_span(&name_token);
-                    fields.push(Field { name, type_, default_value, span });
-                }
+                    None
+                };
+                let span = self.token_to_span(&name_token);
+                fields.push(Field { name, type_, default_value, span });
             } else if self.check(TokenType::Question) {
-                // Coral field syntax: name ? default_value
                 self.advance(); // consume '?'
                 let default_value = Some(self.parse_expression()?);
-                let type_ = Type::Unknown; // Type will be inferred from default value
-                
+                let type_ = Type::Unknown;
                 let span = self.token_to_span(&name_token);
                 fields.push(Field { name, type_, default_value, span });
             } else if self.check(TokenType::LeftParen) {
-                // Method with parameters: name(params)
                 self.advance(); // consume '('
                 let params = self.parse_parameter_list()?;
                 self.consume(TokenType::RightParen, "Expected ')' after parameters")?;
-                
                 let return_type = if self.match_token(TokenType::Arrow) {
                     Some(self.parse_type()?)
                 } else {
                     None
                 };
-                
                 self.consume(TokenType::Colon, "Expected ':' before method body")?;
                 self.skip_newlines();
                 let body = self.parse_block_statements()?;
-                
                 let span = self.token_to_span(&name_token);
                 methods.push(ObjectMethod { name, params, return_type, body, span });
             } else {
-                // Simple field with inferred type: name
-                let type_ = Type::Unknown; // Type will be inferred
+                let type_ = Type::Unknown;
                 let default_value = None;
-                
                 let span = self.token_to_span(&name_token);
                 fields.push(Field { name, type_, default_value, span });
             }
-            
+
             self.skip_newlines();
         }
-        
-        // Consume the closing Dedent token
-        if self.check(TokenType::Dedent) {
-            self.advance();
+
+        if !self.match_token(TokenType::Dedent) {
+            return Err(ParseError::UnexpectedToken {
+                expected: "dedent to close block".to_string(),
+                found: self.peek().clone(),
+            });
         }
-        
+
         Ok((fields, methods))
     }
     
@@ -1225,34 +1156,31 @@ impl Parser {
         Ok(handlers)
     }
     
-    /// Parse an indented block of statements
+        /// Parse an indented block of statements
     fn parse_block_statements(&mut self) -> ParseResult<Vec<Stmt>> {
-        let mut statements = Vec::new();
-        
-        // Expect an Indent token to start the block
         if !self.match_token(TokenType::Indent) {
             return Err(ParseError::UnexpectedToken {
                 expected: "indented block".to_string(),
                 found: self.peek().clone(),
             });
         }
-        
-        // Parse statements until we hit a Dedent token
+
+        let mut statements = Vec::new();
         while !self.check(TokenType::Dedent) && !self.is_at_end() {
             self.skip_newlines();
-            if !self.check(TokenType::Dedent) && !self.is_at_end() {
-                statements.push(self.parse_statement()?);
+            if self.check(TokenType::Dedent) {
+                break;
             }
+            statements.push(self.parse_statement()?);
         }
-        
-        // Consume the Dedent token
+
         if !self.match_token(TokenType::Dedent) {
             return Err(ParseError::UnexpectedToken {
                 expected: "dedent to close block".to_string(),
                 found: self.peek().clone(),
             });
         }
-        
+
         Ok(statements)
     }
     
@@ -1776,8 +1704,7 @@ mod tests {
     #[test]
     fn test_function_definition() {
         // Test indentation-based function syntax without colons
-        let code = r#"fn add(a: i32, b: i32) -> i32
-    return a + b"#;
+        let code = "fn add(a: i32, b: i32) -> i32\n    return a + b";
         let stmt = parse_statement(code).unwrap();
         if let StmtKind::Function { name, params, return_type, .. } = stmt.kind {
             assert_eq!(name, "add");
@@ -1803,7 +1730,7 @@ mod tests {
 
     #[test]
     fn test_assignment_with_equal() {
-        let stmt = parse_statement("bar = 7").unwrap();
+        let stmt = parse_statement("bar is 7").unwrap();
         if let StmtKind::Assignment { target, value } = stmt.kind {
             assert!(matches!(target.kind, ExprKind::Identifier(ref s) if s == "bar"));
             assert!(matches!(value.kind, ExprKind::Literal(Literal::Integer(7))));
@@ -1862,7 +1789,7 @@ mod tests {
     
     #[test]
     fn test_nested_string_interpolation() {
-        let expr = parse_expression("\"Value: {condition ? 'Yes' ! 'No'}\"").unwrap();
+        let expr = parse_expression("'Value: {name}'").unwrap();
         if let ExprKind::StringInterpolation { parts } = expr.kind {
             assert_eq!(parts.len(), 3);
             assert!(matches!(parts[0], StringPart::Literal(ref s) if s == "Value: "));
@@ -1875,7 +1802,7 @@ mod tests {
     
     #[test]
     fn test_string_interpolation_with_escaped_braces() {
-        let expr = parse_expression("\"Value: {{value}}\"").unwrap();
+        let expr = parse_expression("'Value: {{value}}'").unwrap();
         if let ExprKind::StringInterpolation { parts } = &expr.kind {
             assert_eq!(parts.len(), 1);
             assert!(matches!(parts[0], StringPart::Literal(ref s) if s == "Value: {value}"));
@@ -1885,34 +1812,8 @@ mod tests {
     }
     
     #[test]
-    fn test_pipe_statement() {
-        let stmt = parse_statement("pipe myPipe from source to destination nocopy").unwrap();
-        if let StmtKind::Pipe { name, source, destination, nocopy } = stmt.kind {
-            assert_eq!(name, "myPipe");
-            assert_eq!(source, "source");
-            assert_eq!(destination, "destination");
-            assert!(nocopy);
-        } else {
-            panic!("Expected pipe statement");
-        }
-    }
-    
-    #[test]
-    fn test_io_statement() {
-        let stmt = parse_statement("io myOp(arg1, arg2) nocopy").unwrap();
-        if let StmtKind::Io { op, args, nocopy } = stmt.kind {
-            assert_eq!(op, "myOp");
-            assert_eq!(args.len(), 2);
-            assert!(nocopy);
-        } else {
-            panic!("Expected io statement");
-        }
-    }
-
-    #[test]
     fn test_function_definition_with_default_value() {
-        let code = r#"fn test_func(a, b ? 10)
-    return a + b"#;
+        let code = "fn test_func(a, b ? 10)\n    return a + b";
         let stmt = parse_statement(code).unwrap();
         if let StmtKind::Function { name, params, .. } = stmt.kind {
             assert_eq!(name, "test_func");

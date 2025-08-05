@@ -84,8 +84,6 @@ pub enum Type {
     // Result type for error handling
     Result(Box<Type>, Box<Type>),
 
-    Pipe(Box<Type>),
-    
     // Unit type
     Unit,
     
@@ -142,10 +140,6 @@ impl Hash for Type {
                 o.hash(state);
                 e.hash(state);
             }
-            Type::Pipe(t) => {
-                "pipe".hash(state);
-                t.hash(state);
-            }
             Type::Unknown => "unknown".hash(state),
         }
     }
@@ -173,7 +167,6 @@ impl PartialEq for Type {
             (Type::Actor { name: n1, .. }, Type::Actor { name: n2, .. }) => n1 == n2,
             (Type::TypeVar(id1), Type::TypeVar(id2)) => id1 == id2,
             (Type::Result(o1, e1), Type::Result(o2, e2)) => o1 == o2 && e1 == e2,
-            (Type::Pipe(t1), Type::Pipe(t2)) => t1 == t2,
             (Type::Unknown, Type::Unknown) => true,
             _ => false,
         }
@@ -256,7 +249,6 @@ impl Type {
             Type::Actor { name, .. } => format!("actor {}", name),
             Type::TypeVar(id) => format!("T{}", id),
             Type::Result(ok, err) => format!("Result<{}, {}>", ok.to_string(), err.to_string()),
-            Type::Pipe(inner) => format!("pipe<{}>", inner.to_string()),
             Type::Unit => "unit".to_string(),
             Type::Unknown => "unknown".to_string(),
         }
@@ -289,7 +281,6 @@ impl fmt::Display for Type {
             Type::Actor { name, .. } => write!(f, "actor {}", name),
             Type::TypeVar(id) => write!(f, "T{}", id),
             Type::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
-            Type::Pipe(inner) => write!(f, "pipe<{}>", inner),
             Type::Unit => write!(f, "unit"),
             Type::Unknown => write!(f, "unknown"),
         }
@@ -417,16 +408,9 @@ pub enum ExprKind {
         params: Vec<Parameter>,
         body: Box<Expr>,
     },
-    Pipe {
+    ObjectInstantiation {
         name: String,
-        source: String,
-        destination: String,
-        nocopy: bool,
-    },
-    Io {
-        op: String,
-        args: Vec<Expr>,
-        nocopy: bool,
+        fields: Vec<(String, Expr)>,
     },
 }
 
@@ -513,17 +497,6 @@ pub enum StmtKind {
     ErrorHandler {
         handler: ErrorHandler,
         inner: Box<Stmt>, // The statement/expression being guarded
-    },
-    Pipe {
-        name: String,
-        source: String,
-        destination: String,
-        nocopy: bool,
-    },
-    Io {
-        op: String,
-        args: Vec<Expr>,
-        nocopy: bool,
     },
 }
 

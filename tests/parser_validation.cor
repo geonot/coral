@@ -24,18 +24,15 @@ config is
 // =================================
 a is 1 + 2 * 3
 b is (1 + 2) * 3
-c is a > b and b < 10
+c is a gt b and b lt 10
 d is c or not is_active
-e is 10 equals 10
-f is 10 not equals 9
+e is 10 eq 10
+f is 10 neq 9
 
 // =================================
 // Conditionals
 // =================================
-status is if count gt 50
-    "High"
-else
-    "Low"
+status is count gt 50 ? "High" ! "Low"
 
 unless is_pending
     log "Not pending"
@@ -48,14 +45,13 @@ status_text is count gt 90 ? "Urgent" ! "Normal"
 // =================================
 // Loops
 // =================================
-i is 0
-while i lt 3
-    i is i + 1
+while iterator.lt(3)
+    log '{iterator}'
 
-until i equals 5
-    i is i + 1
+until iterator.eq(5)    
+    log '{iterator}'
 
-iterate(my_list)
+iterate my_list
     log $
 
 // Across expression
@@ -69,6 +65,7 @@ fn greet(name, greeting ? "Hello")
     "{greeting}, {name}!"
 
 greet("Coral")
+greet("Coral", "Goodbye")
 greet(name: "Coral", greeting: "Welcome")
 
 // =================================
@@ -91,5 +88,5 @@ store task
 // =================================
 // Error Handling
 // =================================
-data is load("data.json") err (:)
-critical_op() err return log "Critical failure"
+data is load("data.json") err log return
+critical_op() err log "Critical failure" return

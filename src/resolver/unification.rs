@@ -178,7 +178,6 @@ impl TypeResolver {
             InferType::Union(types) => types.iter().any(|t| self.occurs_check(var, t)),
             InferType::Result(ok, err) => self.occurs_check(var, ok) || self.occurs_check(var, err),
             InferType::Iterator(inner) => self.occurs_check(var, inner),
-            InferType::Pipe(inner) => self.occurs_check(var, inner),
             _ => false,
         }
     }

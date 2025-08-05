@@ -246,42 +246,6 @@ impl SemanticAnalyzer {
                 self.symbol_table.exit_scope();
             }
             
-            StmtKind::For { variable, iterable, body } => {
-                let iterable_type = self.visit_expr(iterable);
-                
-                // Determine element type from iterable
-                let element_type = match &iterable_type {
-                    Type::List(elem_type) => *elem_type.clone(),
-                    Type::String => Type::String, // Characters
-                    _ => {
-                        self.error(format!(
-                            "Cannot iterate over type {:?}",
-                            iterable_type
-                        ), iterable.span.clone());
-                        Type::Unknown
-                    }
-                };
-                
-                self.symbol_table.enter_scope();
-                
-                // Define loop variable
-                let loop_var_symbol = Symbol {
-                    name: variable.clone(),
-                    type_: element_type,
-                    kind: SymbolKind::Variable,
-                    span: stmt.span.clone(),
-                };
-                
-                if let Err(err) = self.symbol_table.define(loop_var_symbol) {
-                    self.error(err, stmt.span.clone());
-                }
-                
-                for stmt in body {
-                    self.visit_stmt(stmt);
-                }
-                self.symbol_table.exit_scope();
-            }
-            
             StmtKind::Iterate { iterable, body } => {
                 let iterable_type = self.visit_expr(iterable);
                 
@@ -437,7 +401,7 @@ impl SemanticAnalyzer {
             
             ExprKind::Call { callee, args } => {
                 let callee_type = self.visit_expr(callee);
-                let arg_types: Vec<Type> = args.iter_mut().map(|arg| self.visit_expr(arg)).collect();
+                let arg_types: Vec<Type> = args.iter_mut().map(|arg| self.visit_expr(&mut arg.value)).collect();
                 
                 match callee_type {
                     Type::Function { params, return_type } => {

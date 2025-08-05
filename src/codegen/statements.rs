@@ -1,12 +1,17 @@
 use crate::codegen::{CodegenError, LLVMCodegen, LLVMValue};
-use crate::ast::{Stmt, StmtKind, Expr, Type, Parameter, ExprKind};
+use crate::ast::{Stmt, StmtKind, Expr, Type, Parameter, ExprKind, ObjectMethod};
 use crate::resolver::InferType;
+use crate::codegen::types::{infer_to_llvm_type, LLVMType};
 
 impl LLVMCodegen {
     pub fn compile_statement(&mut self, stmt: &Stmt) -> Result<Option<LLVMValue>, CodegenError> {
         match &stmt.kind {
             StmtKind::Function { name, params, return_type, body } => {
                 self.compile_function_definition(name, params, return_type.as_ref(), body)?;
+                Ok(None)
+            }
+            StmtKind::Store { name, fields, methods } => {
+                self.compile_store_definition(name, fields, methods)?;
                 Ok(None)
             }
             StmtKind::Assignment { target, value } => {
@@ -53,6 +58,21 @@ impl LLVMCodegen {
         }
     }
 
+    pub fn compile_store_definition(&mut self, name: &str, _fields: &[crate::ast::Field], methods: &[ObjectMethod]) -> Result<(), CodegenError> {
+        let struct_name = format!("%{}", name);
+        self.emit(&format!("@{} = common global {} zeroinitializer, align 8", name, struct_name));
+
+        for method in methods {
+            self.compile_function_definition(&format!("{}_{}", name, method.name), &method.params, method.return_type.as_ref(), &method.body)?;
+        }
+
+        // Declare runtime functions for store operations
+        self.emit("declare void @store_save(i8*, i8*)");
+        self.emit("declare i8* @store_load(i8*)");
+
+        Ok(())
+    }
+
     pub fn compile_until_statement(&mut self, condition: &Expr, body: &[Stmt]) -> Result<(), CodegenError> {
         let body_label = self.next_label();
         let cond_label = self.next_label();
@@ -75,27 +95,47 @@ impl LLVMCodegen {
     }
 
     pub fn compile_iterate_statement(&mut self, iterable: &Expr, body: &[Stmt]) -> Result<(), CodegenError> {
-        // This is a simplified implementation for iterating over a list of integers.
-        // A full implementation would require a runtime library for iterators.
         let iterable_val = self.compile_expression(iterable)?;
 
-        let start_label = self.next_label();
-        let body_label = self.next_label();
-        let end_label = self.next_label();
+        // Declare runtime functions for iteration
+        self.emit("declare i8* @iterator_new(i8*)");
+        self.emit("declare i1 @iterator_next(i8*)");
+        self.emit("declare i8* @iterator_get_value(i8*)");
 
-        self.emit(&format!("  br label %L{}", start_label));
-        self.emit(&format!("L{}:", start_label));
+        let iterator_ptr = self.next_temp();
+        self.emit(&format!("  %{} = call i8* @iterator_new({} {})", iterator_ptr, iterable_val.llvm_type, iterable_val.value_id));
 
-        // For now, we'll just execute the body once as a placeholder.
-        self.emit(&format!("  br label %L{}", body_label));
+        let loop_cond_label = self.next_label();
+        let loop_body_label = self.next_label();
+        let loop_end_label = self.next_label();
 
-        self.emit(&format!("L{}:", body_label));
+        self.emit(&format!("  br label %L{}", loop_cond_label));
+        self.emit(&format!("L{}:", loop_cond_label));
+
+        let has_next_ptr = self.next_temp();
+        self.emit(&format!("  %{} = call i1 @iterator_next(i8* %{})", has_next_ptr, iterator_ptr));
+        self.emit(&format!("  br i1 %{}, label %L{}, label %L{}", has_next_ptr, loop_body_label, loop_end_label));
+
+        self.emit(&format!("L{}:", loop_body_label));
+
+        let value_ptr = self.next_temp();
+        self.emit(&format!("  %{} = call i8* @iterator_get_value(i8* %{})", value_ptr, iterator_ptr));
+        
+        // The '$' variable holds the current iteration value.
+        // This is a simplified approach; a real implementation would need to know the type of the value.
+        self.symbols.define_variable("$".to_string(), LLVMValue {
+            type_info: InferType::Unknown, // This should be the element type of the iterable
+            llvm_type: LLVMType::Pointer(Box::new(LLVMType::Int(8))),
+            value_id: format!("%{}", value_ptr),
+        });
+
         for stmt in body {
             self.compile_statement(stmt)?;
         }
-        self.emit(&format!("  br label %L{}", end_label));
 
-        self.emit(&format!("L{}:", end_label));
+        self.emit(&format!("  br label %L{}", loop_cond_label));
+        self.emit(&format!("L{}:", loop_end_label));
+
         Ok(())
     }
 
@@ -132,12 +172,12 @@ impl LLVMCodegen {
 
         for param in params {
             let infer_type = self.ast_type_to_infer_type(&param.type_);
-            let llvm_type = self.infer_type_to_llvm_type(&infer_type);
+            let llvm_type = infer_to_llvm_type(&infer_type);
             param_llvm_types.push(llvm_type.clone());
             param_names.push(param.name.clone());
         }
 
-        let return_llvm_type = self.infer_type_to_llvm_type(&inferred_return_type);
+        let return_llvm_type = infer_to_llvm_type(&inferred_return_type);
 
         self.emit(&format!(
             "define {} @{}({}) {{",
@@ -155,7 +195,7 @@ impl LLVMCodegen {
             self.compile_statement(stmt)?;
         }
 
-        if return_llvm_type == "void" {
+        if return_llvm_type == LLVMType::Void {
             self.emit("  ret void");
         } else {
             self.emit(&format!("  ret {} undef", return_llvm_type));
@@ -170,7 +210,7 @@ impl LLVMCodegen {
 
         if let ExprKind::Identifier(var_name) = &target.kind {
             if let Some(existing_var) = self.symbols.lookup_variable(var_name) {
-                if existing_var.llvm_type.ends_with("*") {
+                if existing_var.llvm_type.to_string().ends_with("*") {
                     self.emit(&format!(
                         "  store {} {}, {} {}",
                         value_result.llvm_type,
@@ -193,7 +233,7 @@ impl LLVMCodegen {
 
                 self.symbols.define_variable(var_name.clone(), LLVMValue {
                     type_info: value_result.type_info,
-                    llvm_type: format!("{}*", value_result.llvm_type),
+                    llvm_type: LLVMType::Pointer(Box::new(value_result.llvm_type)),
                     value_id: format!("%{}", alloca_temp),
                 });
             }

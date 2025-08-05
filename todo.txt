@@ -1,0 +1,145 @@
+
+
+  Comprehensive To-Do List for Coral Language Development
+
+  This list prioritizes critical issues, core functionality, and complex feature completion, building upon the previous analysis.
+
+  Phase 1: Critical Core Functionality & LLVM Codegen Foundation (High Priority)
+
+
+  Goal: Establish a robust LLVM codegen pipeline and re-enable fundamental language features.
+
+
+   1. [COMPLETED] Re-enable and Implement `infer_type_to_llvm_type` (`src/codegen.rs`, `src/resolver.rs`)
+       * Issue: Currently commented out/placeholder, leading to hardcoded LLVM types. This is the most critical bug.
+       * Task:
+           * Define a comprehensive mapping from InferType to LLVM type strings within LLVMCodegen.
+           * Ensure all InferType variants (including Object, List, Map, Function, Result) have a corresponding, accurate LLVM
+             representation.
+           * Integrate this function correctly into all codegen paths that require type-to-LLVM mapping (e.g., function parameters,
+             return types, variable declarations, struct fields, alloca, load, store instructions).
+       * Impact: Enables type-correct LLVM IR generation, crucial for compilation and runtime correctness. Without this, the
+         generated code is fundamentally unsound.
+
+
+   2. [COMPLETED] Implement Remaining Binary and Unary Operations in Codegen (`src/codegen.rs`)
+       * Issue: Only Add, Sub, Mul are implemented in compile_binary_operation.
+       * Task:
+           * Implement LLVM IR generation for all comparison operators (Eq, Ne, Lt, Le, Gt, Ge), returning i1 (boolean).
+           * Implement LLVM IR generation for logical operators (And, Or, Xor), ensuring short-circuiting behavior if applicable or
+             using bitwise operations for bool types.
+           * Implement LLVM IR generation for bitwise operators (BitAnd, BitOr, BitXor, Shl, Shr).
+           * Implement LLVM IR generation for unary operators (Not, Neg, BitNot).
+       * Impact: Completes basic expression compilation, allowing more complex computations and logical flows.
+
+
+   3. [COMPLETED] Full Control Flow Codegen (`src/codegen.rs`)
+       * Issue: if expressions are partially implemented; statements like while, for, unless, until, iterate are not fully
+         translated to LLVM IR.
+       * Task:
+           * Refine LLVM IR generation for StmtKind::If (statements, not just expressions), ensuring correct branching and merging.
+           * Implement LLVM IR generation for StmtKind::While and StmtKind::Until loops using br and labels.
+           * Implement LLVM IR generation for StmtKind::For and StmtKind::Iterate loops, correctly handling the loop variable ($)
+             and iteration over collections (lists, strings, maps).
+           * Implement break and continue statements within loops using br to appropriate labels.
+       * Impact: Enables full control flow in compiled programs, essential for any non-trivial logic.
+
+
+   4. [COMPLETED] Object-Oriented Feature Codegen (`src/codegen.rs`)
+       * Issue: emit_object_struct_type, compile_object_instantiation, compile_method_call, compile_property_access are stubs or
+         incomplete, using hardcoded types.
+       * Task:
+           * Refine emit_object_struct_type to dynamically generate LLVM struct types based on the actual InferType of each field.
+           * Complete compile_object_instantiation to correctly allocate memory for objects and initialize all fields based on their
+             inferred types and provided arguments.
+           * Implement compile_property_access to correctly calculate GEP (GetElementPtr) offsets and load/store values of various
+             types.
+           * Implement compile_method_call to correctly resolve method functions (potentially using vtables or name mangling) and
+             pass self and arguments with correct LLVM types.
+       * Impact: Allows compilation of object-oriented code with correct memory layout and method dispatch, enabling a core paradigm
+         of Coral.
+
+
+  Phase 2: Concurrency & Advanced Language Features (Medium Priority)
+
+  Goal: Bring Coral's unique concurrency model to life and enhance the type system.
+
+
+   1. Actor and Store Codegen (`src/codegen.rs`)
+       * Issue: StmtKind::Actor and StmtKind::Store are explicitly marked as UnsupportedFeature.
+       * Task:
+           * Store: Implement compile_store_definition() to generate LLVM IR for store creation and management, including get, set,
+             update methods. This will require defining a runtime interface for persistent data storage.
+           * Actor: Implement compile_actor_definition() to generate LLVM IR for actor creation, message handling, and message
+             sending. This will require a robust actor runtime system (e.g., message queues, scheduling, potentially thread
+             management).
+       * Impact: Enables the full actor model for concurrent, isolated computation and data persistence features.
+
+
+   2. [COMPLETED] Error Handling Codegen (`src/codegen.rs`)
+       * Issue: ErrorHandler statements only emit comments in the LLVM IR.
+       * Task:
+           * Implement LLVM IR generation for ErrorAction::Log (e.g., calling a runtime logging function, potentially with formatted
+             output).
+           * Implement LLVM IR generation for ErrorAction::Return (e.g., conditional returns based on an error flag or Result type
+             propagation).
+           * Implement LLVM IR generation for ErrorAction::Custom (calling a user-defined error handler function).
+           * Define how Result types are represented in LLVM (e.g., as structs containing a value and an error flag/value) and how
+             they are propagated through function calls.
+       * Impact: Makes the error handling features functional at runtime, providing robust error management.
+
+
+  Phase 3: Refinement, Robustness & Advanced Features (Low Priority)
+
+  Goal: Improve compiler robustness, add missing details, and clean up the codebase.
+
+
+   1. Refine Type System Details (`src/resolver.rs`, `src/semantic.rs`)
+       * Issue: infer_method_type uses placeholders for return types; InferType::Actor handler types are simplified;
+         types_compatible is basic.
+       * Task:
+           * Implement full inference of method return types from their bodies in infer_method_type.
+           * Refine InferType::Actor to accurately represent message handler signatures, including the message type and the actor's
+             internal state.
+           * Implement full type inference and unification rules for InferType::Result and InferType::Union types, ensuring correct
+             type propagation and error checking.
+           * Strengthen types_compatible in src/semantic.rs with more nuanced rules for implicit type conversions (e.g., widening
+             conversions for numbers) and subtyping (e.g., for objects).
+       * Impact: Increases type system accuracy, expressiveness, and compiler intelligence.
+
+
+   2. Lexer and Parser Enhancements (`src/lexer.rs`, `src/parser.rs`)
+       * Issue: Limited error recovery, no multi-line strings.
+       * Task:
+           * Improve error reporting and recovery mechanisms in both lexer and parser to provide more helpful messages (e.g., "Did
+             you mean X?") and allow parsing to continue after minor errors, reducing cascading errors.
+           * Add support for multi-line string literals (e.g., using triple-quoted strings """...""").
+           * Consider adding support for raw string literals (e.g., r"...") to avoid backslash escaping.
+       * Impact: Improves developer experience, making the language easier to write and debug.
+
+
+   3. Code Cleanup and Optimization (`src/lexer.rs`, `src/parser.rs`, `src/resolver.rs`, `src/codegen.rs`)
+       * Issue: Unused variables/methods, potential dead code, general code quality.
+       * Task:
+           * Address all unused variable and dead_code warnings (e.g., _fields in StmtKind::Actor patterns, parse_message_handlers,
+             check_at_offset, type_to_string, infer_method_call, module_name).
+           * Review and remove any truly dead code that is no longer part of the language design.
+           * Optimize string handling and allocations where possible, especially in the lexer and parser.
+           * Add comprehensive comments for complex logic, especially in codegen and resolver, explaining why certain decisions were
+             made.
+           * Ensure consistent coding style and formatting across all files.
+       * Impact: Improves code quality, maintainability, and reduces potential for future bugs.
+
+
+   4. Runtime Library Development (External to Compiler)
+       * Issue: Many LLVM codegen features (pipes, IO, actors, stores) require a corresponding runtime library to provide the
+         underlying system interactions.
+       * Task:
+           * Design and implement a C/C++/Rust runtime library that provides the necessary functions for:
+               * Pipe communication (e.g., pipe_create, pipe_read, pipe_write, pipe_close).
+               * Basic I/O operations (e.g., io_read_file, io_write_file, io_print, io_input).
+               * Actor system primitives (e.g., actor_spawn, actor_send_message, message queue management, actor lifecycle).
+               * Store management (e.g., store_get, store_set, store_update, store_delete).
+               * Memory management (e.g., malloc, realloc, free if not relying solely on LLVM's default or a garbage collector).
+       * Impact: Provides the necessary execution environment for compiled Coral programs, making the advanced features functional.
+

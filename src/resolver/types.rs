@@ -83,9 +83,6 @@ pub enum InferType {
     // Result type for error propagation
     Result(Box<InferType>, Box<InferType>),
     
-    // Pipe type for data streaming
-    Pipe(Box<InferType>),
-    
     // Iterator types for Coral's iteration model
     Iterator(Box<InferType>),
     
@@ -111,7 +108,6 @@ impl PartialEq for InferType {
             (InferType::Actor { name: n1, .. }, InferType::Actor { name: n2, .. }) => n1 == n2,
             (InferType::Var(v1), InferType::Var(v2)) => v1 == v2,
             (InferType::Result(o1, e1), InferType::Result(o2, e2)) => o1 == o2 && e1 == e2,
-            (InferType::Pipe(t1), InferType::Pipe(t2)) => t1 == t2,
             (InferType::Iterator(t1), InferType::Iterator(t2)) => t1 == t2,
             (InferType::Unknown, InferType::Unknown) => true,
             _ => false,
@@ -197,35 +193,9 @@ impl InferType {
             },
             InferType::Var(v) => Type::TypeVar(v.0 as u32),
             InferType::Result(ok, err) => Type::Result(Box::new(ok.to_ast_type()), Box::new(err.to_ast_type())),
-            InferType::Pipe(t) => Type::Pipe(Box::new(t.to_ast_type())),
             _ => Type::Unknown,
         }
     }
 
-    /// Convert InferType to its LLVM IR type representation
-    pub fn to_llvm_type(&self) -> String {
-        match self {
-            InferType::Unit => "void".to_string(),
-            InferType::Bool => "i1".to_string(),
-            InferType::Int => "i64".to_string(), // Default to i64
-            InferType::Float => "double".to_string(), // Default to double
-            InferType::String => "%string".to_string(), // Assuming a custom string type
-            InferType::List(_) => format!("%list*"), // Pointer to a list struct
-            InferType::Map(_, _) => format!("%map*"), // Pointer to a map struct
-            InferType::Function { params, return_type, .. } => {
-                let ret_type = return_type.to_llvm_type();
-                let param_types: Vec<String> = params.iter().map(|p| p.to_llvm_type()).collect();
-                format!("{} ({})*", ret_type, param_types.join(", "))
-            }
-            InferType::Object { name, .. } => format!("%{}", name),
-            InferType::Store { name, .. } => format!("%{}*", name), // Pointer to the store object
-            InferType::Actor { name, .. } => format!("%{}*", name), // Pointer to the actor object
-            InferType::Var(_) => "i8*".to_string(), // Should be resolved before codegen
-            InferType::Result(ok, _err) => ok.to_llvm_type(), // Simplified: just use the ok type
-            InferType::Pipe(_) => "%pipe*".to_string(),
-            InferType::Iterator(_) => format!("%iterator*"),
-            InferType::Unknown => "i8*".to_string(), // Should be resolved
-            _ => "i8*".to_string(), // Default for other complex types
-        }
-    }
+    
 }

@@ -36,6 +36,14 @@ impl TypeResolver {
         
         // Empty value
         self.env.bind("empty".to_string(), InferType::Var(self.var_gen.fresh()));
+
+        // Print function
+        let print_type = InferType::Function {
+            params: vec![InferType::String],
+            return_type: Box::new(InferType::Unit),
+            effects: EffectSet::io(),
+        };
+        self.env.bind("print".to_string(), print_type);
     }
     
     /// Collect function signatures for forward references
@@ -78,9 +86,8 @@ impl TypeResolver {
                     self.env.bind(name.clone(), obj_type);
                 }
                 
-                StmtKind::Store { name, value_type, initial_value: _ } => {
-                    // Convert value_type to InferType
-                    let store_type = self.ast_type_to_infer_type(value_type)?;
+                StmtKind::Store { name, fields, methods } => {
+                    let store_type = self.create_object_type(name, fields, methods, false, true)?;
                     self.store_types.insert(name.clone(), store_type.clone());
                     self.env.bind(name.clone(), store_type);
                 }
@@ -311,10 +318,6 @@ impl TypeResolver {
                 let err_type = self.ast_type_to_infer_type(err)?;
                 Ok(InferType::Result(Box::new(ok_type), Box::new(err_type)))
             }
-            Type::Pipe(inner) => {
-                let inner_type = self.ast_type_to_infer_type(inner)?;
-                Ok(InferType::Pipe(Box::new(inner_type)))
-            }
             Type::Unknown => Ok(InferType::Var(self.var_gen.fresh())),
         }
     }
@@ -408,7 +411,8 @@ impl TypeResolver {
             }
             
             ExprKind::Call { callee, args } => {
-                self.infer_call_expression(callee, args)
+                let arg_exprs: Vec<_> = args.iter().map(|arg| arg.value.clone()).collect();
+                self.infer_call_expression(callee, &arg_exprs)
             }
             
             ExprKind::Index { object, index } => {
@@ -517,53 +521,24 @@ impl TypeResolver {
                     return_type: Box::new(return_type),
                     effects: EffectSet::pure(),
                 })
-            }
-            
-            ExprKind::Pipe { name: _, source, destination, nocopy: _ } => {
-                let source_expr = Expr::new(SourceSpan::default(), ExprKind::Literal(Literal::String(source.clone())));
-                let destination_expr = Expr::new(SourceSpan::default(), ExprKind::Literal(Literal::String(destination.clone())));
-                let source_type = self.infer_expression(&source_expr)?;
-                let _destination_type = self.infer_expression(&destination_expr)?;
-
-                // For now, assume pipe element type is the source type
-                // TODO: More sophisticated type inference for pipes, considering destination
-                let pipe_element_type = source_type;
-
-                Ok(InferType::Pipe(Box::new(pipe_element_type)))
             },
-            ExprKind::Io { op, args, nocopy: _ } => {
-                // Infer the type of the IO operation based on its name and args.
-                match op.as_str() {
-                    "read" => {
-                        // io.read(path: string) -> string
-                        if args.len() != 1 {
-                            return Err(TypeError::ArityMismatch(1, args.len()));
+
+            ExprKind::ObjectInstantiation { name, fields } => {
+                if let Some(obj_type) = self.object_definitions.get(name) {
+                    let mut obj_type = obj_type.clone();
+                    if let InferType::Object { fields: obj_fields, .. } = &mut obj_type {
+                        for (field_name, field_expr) in fields {
+                            let field_type = self.infer_expression(field_expr)?;
+                            if let Some(obj_field_type) = obj_fields.get(field_name) {
+                                self.constraints.push(Constraint::Equal(field_type, obj_field_type.clone()));
+                            } else {
+                                return Err(TypeError::FieldNotFound(field_name.clone()));
+                            }
                         }
-                        let arg_type = self.infer_expression(&args[0])?;
-                        self.constraints.push(Constraint::Equal(arg_type, InferType::String));
-                        Ok(InferType::String)
                     }
-                    "write" => {
-                        // io.write(path: string, data: string) -> unit
-                        if args.len() != 2 {
-                            return Err(TypeError::ArityMismatch(2, args.len()));
-                        }
-                        let path_type = self.infer_expression(&args[0])?;
-                        let data_type = self.infer_expression(&args[1])?;
-                        self.constraints.push(Constraint::Equal(path_type, InferType::String));
-                        self.constraints.push(Constraint::Equal(data_type, InferType::String));
-                        Ok(InferType::Unit)
-                    }
-                    "print" => {
-                        // io.print(data: any) -> unit
-                        if args.len() != 1 {
-                            return Err(TypeError::ArityMismatch(1, args.len()));
-                        }
-                        // We don't need to constrain the argument type for print
-                        let _ = self.infer_expression(&args[0])?;
-                        Ok(InferType::Unit)
-                    }
-                    _ => Ok(InferType::Unknown),
+                    Ok(obj_type)
+                } else {
+                    Err(TypeError::UnknownVariable(name.clone()))
                 }
             },
             
@@ -596,6 +571,7 @@ impl TypeResolver {
 
                 Ok(InferType::Unit)
             }
+            _ => Ok(InferType::Unknown),
         }
     }
 
@@ -677,8 +653,8 @@ impl TypeResolver {
                 Ok(InferType::Unit)
             }
             
-            StmtKind::Store { name, value_type, initial_value } => {
-                let store_type = self.create_store_type(name, value_type, initial_value)?;
+            StmtKind::Store { name, fields, methods } => {
+                let store_type = self.create_object_type(name, fields, methods, false, true)?;
                 self.store_types.insert(name.clone(), store_type.clone());
                 self.env.bind(name.clone(), store_type);
                 Ok(InferType::Unit)
@@ -704,23 +680,6 @@ impl TypeResolver {
                 Ok(then_type)
             }
             
-            StmtKind::For { variable, iterable, body } => {
-                let iterable_type = self.infer_expression(iterable)?;
-                let element_type = InferType::Var(self.var_gen.fresh());
-                
-                self.constraints.push(Constraint::IsIterable(iterable_type, element_type.clone()));
-                
-                // Add loop variable to scope
-                let mut loop_env = self.env.extend();
-                loop_env.bind(variable.clone(), element_type);
-                
-                let old_env = std::mem::replace(&mut self.env, loop_env);
-                let _body_type = self.infer_block(body)?;
-                self.env = old_env;
-                
-                Ok(InferType::Unit)
-            }
-            
             StmtKind::While { condition, body } => {
                 let cond_type = self.infer_expression(condition)?;
                 self.constraints.push(Constraint::Equal(cond_type, InferType::Bool));
@@ -735,19 +694,6 @@ impl TypeResolver {
                 } else {
                     Ok(InferType::Unit)
                 }
-            }
-            
-            StmtKind::Pipe { name, source, destination, nocopy: _ } => {
-                let source_type = self.env.lookup(source).ok_or_else(|| TypeError::UnknownVariable(source.clone()))?;
-                let dest_type = self.env.lookup(destination).ok_or_else(|| TypeError::UnknownVariable(destination.clone()))?;
-
-                // Unify source and destination types to ensure they are compatible.
-                self.constraints.push(Constraint::Equal(source_type.clone(), dest_type));
-
-                // The pipe's element type is the unified type.
-                let pipe_type = InferType::Pipe(Box::new(source_type));
-                self.env.bind(name.clone(), pipe_type);
-                Ok(InferType::Unit)
             }
             _ => Ok(InferType::Unit),
         }

@@ -1,6 +1,7 @@
 use crate::codegen::{CodegenError, LLVMCodegen, LLVMValue};
 use crate::ast::{Expr, ExprKind, BinaryOp, UnaryOp, Literal};
 use crate::resolver::InferType;
+use crate::codegen::types::infer_to_llvm_type;
 
 impl LLVMCodegen {
     pub fn compile_expression(&mut self, expr: &Expr) -> Result<LLVMValue, CodegenError> {
@@ -13,7 +14,7 @@ impl LLVMCodegen {
                 if let Some(obj_type) = self.lookup_object_type(name) {
                     return Ok(LLVMValue {
                         type_info: obj_type.clone(),
-                        llvm_type: self.infer_type_to_llvm_type(&obj_type),
+                        llvm_type: infer_to_llvm_type(&obj_type),
                         value_id: format!("@{}", name),
                     });
                 }
@@ -26,18 +27,19 @@ impl LLVMCodegen {
                 self.compile_unary_operation(op, operand)
             }
             ExprKind::Call { callee, args } => {
+                let arg_exprs: Vec<_> = args.iter().map(|arg| arg.value.clone()).collect();
                 match &callee.kind {
                     ExprKind::Identifier(type_or_func) => {
                         if let Some(obj_type) = self.lookup_object_type(type_or_func) {
-                            self.compile_object_instantiation(type_or_func, obj_type, args)
+                            self.compile_object_instantiation(type_or_func, obj_type, &arg_exprs)
                         } else {
-                            self.compile_function_call(callee, args)
+                            self.compile_function_call(callee, &arg_exprs)
                         }
                     }
                     ExprKind::FieldAccess { object, field } => {
-                        self.compile_method_call(object, field, args)
+                        self.compile_method_call(object, field, &arg_exprs)
                     }
-                    _ => self.compile_function_call(callee, args),
+                    _ => self.compile_function_call(callee, &arg_exprs),
                 }
             }
             ExprKind::FieldAccess { object, field } => {
@@ -52,6 +54,14 @@ impl LLVMCodegen {
             ExprKind::MapLiteral(elements) => self.compile_map_literal(elements),
             ExprKind::MapInsert { map, key, value } => self.compile_map_insert(map, key, value),
             ExprKind::StringInterpolation { parts } => self.compile_string_interpolation(parts),
+            ExprKind::ObjectInstantiation { name, fields } => {
+                let obj_type = self.lookup_object_type(name).unwrap();
+                let mut args = Vec::new();
+                for (_, field_expr) in fields {
+                    args.push(field_expr.clone());
+                }
+                self.compile_object_instantiation(name, obj_type, &args)
+            }
             _ => Err(CodegenError::UnsupportedFeature(
                 format!("Expression type not implemented: {:?}", expr.kind)
             ))
@@ -62,12 +72,12 @@ impl LLVMCodegen {
         match lit {
             Literal::Integer(i) => Ok(LLVMValue {
                 type_info: InferType::Int,
-                llvm_type: "i64".to_string(),
+                llvm_type: crate::codegen::types::LLVMType::Int(64),
                 value_id: i.to_string(),
             }),
             Literal::Float(f) => Ok(LLVMValue {
                 type_info: InferType::Float,
-                llvm_type: "double".to_string(),
+                llvm_type: crate::codegen::types::LLVMType::Double,
                 value_id: f.to_string(),
             }),
             Literal::String(s) => {
@@ -83,18 +93,18 @@ impl LLVMCodegen {
                 self.emit(&format!("  %{} = getelementptr inbounds [{} x i8], [{} x i8]* {}, i64 0, i64 0", global_ptr_temp, string_len, string_len, string_const_name));
                 Ok(LLVMValue {
                     type_info: InferType::String,
-                    llvm_type: "i8*".to_string(),
+                    llvm_type: crate::codegen::types::LLVMType::Pointer(Box::new(crate::codegen::types::LLVMType::Int(8))),
                     value_id: format!("%{}", global_ptr_temp),
                 })
             },
             Literal::Bool(b) => Ok(LLVMValue {
                 type_info: InferType::Bool,
-                llvm_type: "i1".to_string(),
+                llvm_type: crate::codegen::types::LLVMType::Int(1),
                 value_id: if *b { "true".to_string() } else { "false".to_string() },
             }),
             Literal::Unit => Ok(LLVMValue {
                 type_info: InferType::Unit,
-                llvm_type: "void".to_string(),
+                llvm_type: crate::codegen::types::LLVMType::Void,
                 value_id: "".to_string(),
             }),
             _ => Err(CodegenError::UnsupportedFeature(format!("Literal type not implemented: {:?}", lit))),
@@ -141,7 +151,7 @@ impl LLVMCodegen {
         
         Ok(LLVMValue {
             type_info: result_type.clone(),
-            llvm_type: self.infer_type_to_llvm_type(&result_type),
+            llvm_type: infer_to_llvm_type(&result_type),
             value_id: format!("%{}", result_temp),
         })
     }
@@ -162,7 +172,7 @@ impl LLVMCodegen {
             UnaryOp::BitNot => ("xor", InferType::Int),
         };
 
-        let llvm_result_type = self.infer_type_to_llvm_type(&result_type);
+        let llvm_result_type = infer_to_llvm_type(&result_type);
 
         match op {
             UnaryOp::Neg => {

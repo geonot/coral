@@ -1,0 +1,16 @@
+object point 
+    x
+    y
+
+    as string
+        '({x}, {y})'
+
+fn main()
+
+    p is point.make 1, 2
+    log p
+
+    points is [point.make(3, 4), point.make(5, 6)]
+
+    iterate points
+        log $

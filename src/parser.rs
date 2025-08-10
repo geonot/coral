@@ -113,7 +113,7 @@ impl Parser {
     }
     
     // Statement parsing
-    """    fn parse_statement(&mut self) -> ParseResult<Stmt> {
+   fn parse_statement(&mut self) -> ParseResult<Stmt> {
         self.skip_newlines();
         match self.peek().token_type {
             TokenType::Fn => self.parse_function_statement(),
@@ -158,7 +158,7 @@ impl Parser {
                 return Ok(stmt);
             }
         }
-    }""
+    }
     
     fn parse_function_statement(&mut self) -> ParseResult<Stmt> {
         let start = self.advance(); // consume 'fn'
